@@ -226,7 +226,7 @@ footer { font-size: .78em; color: var(--muted); }
     <button class="btn secondary" type="button" id="againBtn">Tirar outra foto</button>
   </section>
 
-  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho.</footer>
+  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v2</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -524,7 +524,11 @@ pingModel().catch(e => {
   const b = document.createElement('p'); b.className = 'panel'; b.style.color = 'var(--accent)'; b.style.fontWeight = '700';
   b.textContent = errMsg(e); $('vHome').prepend(b);
 });
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  // quando uma versão nova do app assume, recarrega uma vez para mostrar a página nova
+  if (navigator.serviceWorker.controller) navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+}
 })();
 </script>
 </body>
