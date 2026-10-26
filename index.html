@@ -220,9 +220,7 @@ footer { font-size: .78em; color: var(--muted); }
           <button type="button" data-v="Cachorro" aria-pressed="true">Cachorro</button>
           <button type="button" data-v="Gato" aria-pressed="false">Gato</button>
           <button type="button" data-v="Outro" aria-pressed="false">Outro</button>
-        </div>
-        <span class="note" id="especieHint" style="font-weight:400" hidden></span>
-      </div>
+        </div>      </div>
       <label class="field"><span id="lBairro">Bairro onde foi visto por último(a)</span><input id="fBairro" type="text" autocomplete="off" placeholder="Ex.: Centro"></label>
       <label class="field"><span id="lData">Visto por último(a) no dia</span><input id="fData" type="date"></label>
       <label class="field"><span id="lDesc">Descrição</span><textarea id="fDesc" maxlength="300" rows="3"></textarea></label>
@@ -298,7 +296,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v6</footer>
+  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v7</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -356,7 +354,7 @@ let worker = null, seq = 0; const jobs = new Map();
 function getWorker() {
   if (!worker) {
     worker = new Worker('modelo-worker.js');
-    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); if (m.error) return j.rej(new Error(m.error)); if (m.ok) return j.res(true); const e = new Float32Array(m.emb); e.esp = m.esp; j.res(e); };
+    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); m.error ? j.rej(new Error(m.error)) : j.res(m.ok ? true : new Float32Array(m.emb)); };
     worker.onerror = () => { for (const j of jobs.values()) j.rej(new Error('worker')); jobs.clear(); worker = null; };
   }
   return worker;
@@ -476,9 +474,9 @@ const TEXTOS = {
     nome: 'Nome (se souber, pela coleira)', bairro: 'Bairro onde foi encontrado', data: 'Encontrado no dia',
     desc: 'Descrição (cor, porte, coleira, onde ele está agora)', descPh: 'Ex.: cachorro preto de porte médio, sem coleira, está comigo em casa' }
 };
-let editando = null, especieManual = false; // cadastro aberto para edição; a pessoa escolheu a espécie à mão
+let editando = null; // cadastro aberto para edição
 function abrirCadastro(m, itens = [], pet = null) {
-  const T = TEXTOS[m]; modo = m; editando = pet; especieManual = !!pet;
+  const T = TEXTOS[m]; modo = m; editando = pet;
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = itens; renderDraft();
   $('formTitle').textContent = pet ? `Editar ${nomeDe(pet)}` : T.titulo; $('fotosTitle').textContent = T.fotos; $('fotosNote').textContent = T.fotosNote;
   $('lNome').textContent = T.nome; $('lBairro').textContent = T.bairro; $('lData').textContent = T.data;
@@ -488,12 +486,11 @@ function abrirCadastro(m, itens = [], pet = null) {
   $('fNome').value = v.nome || ''; $('fBairro').value = v.bairro || ''; $('fDesc').value = v.descricao || ''; $('fContato').value = v.contato || '';
   $('fZap').value = v.zap ? maskZap(v.zap) : ''; $('fRecompensa').value = v.recompensa ? fmtReais(v.recompensa) : '';
   $('fData').value = pet ? v.data || '' : hoje();
-  setChip('fEspecie', v.especie || 'Cachorro'); $('especieHint').hidden = true;
+  setChip('fEspecie', v.especie || 'Cachorro');
   $('saveLost').textContent = pet ? 'Salvar alterações' : 'Salvar cadastro';
   const arq = $('arqBtn'); arq.hidden = !pet; delete arq.dataset.armed;
   arq.textContent = pet && pet.arquivado ? 'Reativar cadastro' : m === 'perdido' ? 'Arquivar (encontrei ou parei de procurar)' : 'Arquivar (o animal já voltou para casa)';
   $('lostErr').hidden = true; show('vLost');
-  sugerirEspecie();
 }
 $('goLost').onclick = () => abrirCadastro('perdido');
 function editar(pet) {
@@ -507,17 +504,7 @@ $('arqBtn').onclick = async () => {
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null; goHome();
 };
 function setChip(id, v) { document.querySelectorAll(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === v))); }
-chips('fEspecie', () => { especieManual = true; });
-// sugere a espécie pela média das fotos (classificador do modelo); só troca se a pessoa não escolheu à mão
-function sugerirEspecie() {
-  const es = draft.map(f => f.emb && f.emb.esp).filter(Boolean);
-  if (!es.length) return;
-  const cao = es.reduce((s, e) => s + e.cao, 0) / es.length, gato = es.reduce((s, e) => s + e.gato, 0) / es.length;
-  const v = cao >= 0.5 ? 'Cachorro' : gato >= 0.5 ? 'Gato' : cao + gato < 0.1 ? 'Outro' : null;
-  const h = $('especieHint'); h.hidden = false;
-  h.textContent = v ? `Pela foto, parece ${v === 'Outro' ? 'outro tipo de animal' : v === 'Gato' ? 'um gato' : 'um cachorro'}. Se não for, toque na opção certa.` : 'Não deu para saber pela foto. Escolha a opção certa.';
-  if (v && !especieManual) setChip('fEspecie', v);
-}
+chips('fEspecie');
 function renderDraft() {
   const box = $('lostThumbs'); box.textContent = '';
   draft.forEach((f, i) => {
@@ -533,7 +520,7 @@ function renderDraft() {
 async function addDraft(blob) {
   const item = { url: URL.createObjectURL(blob), emb: null, thumb: null, foto: null };
   draft.push(item); renderDraft();
-  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); sugerirEspecie(); }
+  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); }
   catch (e) { item.failed = true; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
   renderDraft();
 }
@@ -729,23 +716,12 @@ async function drawPoster(p) {
   const alto = blocos.reduce((s, b) => s + b[4], 0);
   let ty = y - alto;
   for (const [t, w, s, cor, h] of blocos) { g.fillStyle = cor; fit(t, w, s, 960); g.fillText(t, W / 2, ty + h - s * 0.6); ty += h; }
-  // fotos: até 3; se o app já reconheceu o animal, a última vaga mostra a foto do reconhecimento
+  // fotos: 1 grande, 2 lado a lado ou 1 grande + 2 pequenas
   const top = 190, ph = y - alto - 24 - top;
-  const av = (p.avistamentos || [])[0];
-  const tiles = p.fotos.slice(0, av ? 2 : 3).map(f => ({ blob: f.foto || f.thumb }));
-  if (av) tiles.push({ blob: av.thumb, av });
-  const imgs = await Promise.all(tiles.map(t => createImageBitmap(t.blob)));
-  const sw = 300, boxes = tiles.length >= 3 ? [[60, top, 940 - sw, ph], [1020 - sw, top, sw, (ph - 20) / 2], [1020 - sw, top + (ph + 20) / 2, sw, (ph - 20) / 2]]
-    : tiles.length === 2 ? [[60, top, 470, ph], [550, top, 470, ph]] : [[60, top, 960, ph]];
-  tiles.forEach((t, i) => {
-    const [x, y0, w, h] = boxes[i]; cover(imgs[i], x, y0, w, h);
-    if (!t.av) return;
-    g.save(); rr(x, y0, w, h, 28); g.clip();
-    g.fillStyle = 'rgba(31,122,77,.92)'; g.fillRect(x, y0 + h - 86, w, 86);
-    g.fillStyle = '#FFFFFF'; fit('ÚLTIMO AVISTAMENTO', 800, 28, w - 24); g.fillText('ÚLTIMO AVISTAMENTO', x + w / 2, y0 + h - 60);
-    fit(fmtQuando(t.av.quando), 400, 26, w - 24); g.fillText(fmtQuando(t.av.quando), x + w / 2, y0 + h - 26);
-    g.restore();
-  });
+  const imgs = await Promise.all(p.fotos.slice(0, 3).map(f => createImageBitmap(f.foto || f.thumb)));
+  const sw = 300, boxes = imgs.length >= 3 ? [[60, top, 940 - sw, ph], [1020 - sw, top, sw, (ph - 20) / 2], [1020 - sw, top + (ph + 20) / 2, sw, (ph - 20) / 2]]
+    : imgs.length === 2 ? [[60, top, 470, ph], [550, top, 470, ph]] : [[60, top, 960, ph]];
+  imgs.forEach((img, i) => cover(img, ...boxes[i]));
   imgs.forEach(b => b.close && b.close());
   return new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
 }

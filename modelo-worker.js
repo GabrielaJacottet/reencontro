@@ -1,36 +1,7 @@
 /* Gera a "impressão visual" (vetor de 1024 números) de uma foto, no próprio aparelho.
    Rede: DarkNet Reference (ml5.js, licença MIT), com BatchNorm incorporada e pesos em int8. */
 'use strict';
-let layers = null, head = null;
-
-/* Classificador ImageNet do mesmo modelo (conv 1x1 1024->1000, int8), só para sugerir a espécie.
-   Opcional: sem o arquivo, o app funciona igual, só não sugere. */
-async function loadHead() {
-  for (const caminho of ['modelo/classes-int8.bin', 'classes-int8.bin']) {
-    try {
-      const r = await fetch(caminho); if (!r.ok) continue;
-      const buf = await r.arrayBuffer(), cin = 1024, cout = 1000;
-      if (buf.byteLength !== 8 * cout + cin * cout) return;
-      const scale = new Float32Array(buf.slice(0, 4 * cout)), bias = new Float32Array(buf.slice(4 * cout, 8 * cout));
-      const q = new Int8Array(buf, 8 * cout), w = new Float32Array(q.length);
-      for (let i = 0; i < q.length; i++) w[i] = q[i] * scale[i % cout];
-      head = { cin, cout, w, bias }; return;
-    } catch (_) {}
-  }
-}
-// ImageNet: 151-280 cães e canídeos (vira-lata às vezes cai em "dingo"), 281-293 gatos e felinos
-function especie(a, P) {
-  const { cin, cout, w, bias } = head, z = new Float32Array(cout);
-  for (let p = 0; p < P; p++) {
-    const o = new Float32Array(bias);
-    for (let c = 0; c < cin; c++) { const v = a[p * cin + c]; if (v === 0) continue; const wb = c * cout; for (let k = 0; k < cout; k++) o[k] += v * w[wb + k]; }
-    for (let k = 0; k < cout; k++) z[k] += (o[k] < 0 ? o[k] * 0.1 : o[k]) / P;
-  }
-  let m = -Infinity; for (const v of z) m = Math.max(m, v);
-  let tot = 0, cao = 0, gato = 0;
-  for (let k = 0; k < cout; k++) { const e = Math.exp(z[k] - m); tot += e; if (k >= 151 && k <= 280) cao += e; else if (k >= 281 && k <= 293) gato += e; }
-  return { cao: cao / tot, gato: gato / tot };
-}
+let layers = null;
 
 async function load() {
   if (layers) return;
@@ -40,7 +11,7 @@ async function load() {
     }
     throw new Error('modelo_ausente:' + nome);
   };
-  const [meta, buf] = await Promise.all([get('darknet-int8.json', 'json'), get('darknet-int8.bin', 'bin'), loadHead()]);
+  const [meta, buf] = await Promise.all([get('darknet-int8.json', 'json'), get('darknet-int8.bin', 'bin')]);
   if (buf.byteLength < 6000000) throw new Error('modelo_incompleto');
   layers = meta.layers.map(m => {
     const { cin, cout, off } = m;
@@ -96,7 +67,7 @@ function embed(pixels) {
   for (let p = 0; p < s * s; p++) for (let c = 0; c < C; c++) f[c] += a[p * C + c];
   let n = 0; for (let c = 0; c < C; c++) n += f[c] * f[c];
   n = Math.sqrt(n) || 1; for (let c = 0; c < C; c++) f[c] /= n;
-  return { f, esp: head && C === head.cin ? especie(a, s * s) : null };
+  return f;
 }
 
 self.onmessage = async ev => {
@@ -104,8 +75,8 @@ self.onmessage = async ev => {
   try {
     await load();
     if (ping) { postMessage({ id, ok: true }); return; }
-    const { f, esp } = embed(new Float32Array(pixels));
-    postMessage({ id, emb: f.buffer, esp }, [f.buffer]);
+    const f = embed(new Float32Array(pixels));
+    postMessage({ id, emb: f.buffer }, [f.buffer]);
   } catch (e) {
     postMessage({ id, error: String((e && e.message) || e) });
   }
