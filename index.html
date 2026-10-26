@@ -181,7 +181,8 @@ footer { font-size: .78em; color: var(--muted); }
       <div class="chips" id="filtroTipo" role="group" aria-label="Situação">
         <button type="button" data-v="" aria-pressed="true">Todos</button>
         <button type="button" data-v="perdido" aria-pressed="false">Desaparecidos</button>
-        <button type="button" data-v="encontrado" aria-pressed="false">Encontrados</button>
+        <button type="button" data-v="encontrado" aria-pressed="false">Encontrados na rua</button>
+        <button type="button" data-v="arquivado" aria-pressed="false">Arquivados</button>
       </div>
       <div class="chips" id="filtroEspecie" role="group" aria-label="Espécie">
         <button type="button" data-v="" aria-pressed="true">Todas</button>
@@ -220,6 +221,7 @@ footer { font-size: .78em; color: var(--muted); }
           <button type="button" data-v="Gato" aria-pressed="false">Gato</button>
           <button type="button" data-v="Outro" aria-pressed="false">Outro</button>
         </div>
+        <span class="note" id="especieHint" style="font-weight:400" hidden></span>
       </div>
       <label class="field"><span id="lBairro">Bairro onde foi visto por último(a)</span><input id="fBairro" type="text" autocomplete="off" placeholder="Ex.: Centro"></label>
       <label class="field"><span id="lData">Visto por último(a) no dia</span><input id="fData" type="date"></label>
@@ -233,6 +235,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
     <p class="error" id="lostErr" style="color:var(--accent);font-weight:700" hidden></p>
     <button class="btn" type="button" id="saveLost">Salvar cadastro</button>
+    <button class="btn secondary" type="button" id="arqBtn" hidden>Arquivar</button>
   </section>
 
   <!-- ============ COMPARANDO / RESULTADO ============ -->
@@ -256,8 +259,8 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
     <div class="panel" id="regBox" hidden>
       <h2 id="regTitle">Cadastre este animal</h2>
-      <p class="note" style="margin:0">Mesmo sem saber o nome, o cadastro ajuda: quando o tutor cadastrar o pet, o app compara com os animais encontrados.</p>
-      <button class="btn" type="button" id="regFound">Cadastrar como animal encontrado</button>
+      <p class="note" style="margin:0">Mesmo sem saber o nome, o cadastro ajuda: quando o tutor cadastrar o pet, o app compara com os animais encontrados na rua.</p>
+      <button class="btn" type="button" id="regFound">Cadastrar como animal encontrado na rua</button>
     </div>
     <button class="btn secondary" type="button" id="againBtn">Tirar outra foto</button>
   </section>
@@ -276,13 +279,26 @@ footer { font-size: .78em; color: var(--muted); }
       <a class="btn secondary" id="posterDown" href="#" download="anuncio.jpg">Baixar imagem</a>
     </div>
     <button class="btn small secondary" type="button" id="posterCopy">Copiar texto do anúncio</button>
+    <div class="panel" id="threadBox" hidden>
+      <h2 id="threadTitle">Avistamentos</h2>
+      <div class="pets" id="threadList"></div>
+      <div id="avForm" style="display:flex;flex-direction:column;gap:12px" hidden>
+        <h2>Registrar o que você viu neste anúncio</h2>
+        <label class="field">O que você viu?<textarea id="avTexto" maxlength="300" rows="3" placeholder="Ex.: estava na praça, assustado, sem coleira. Dei água e ficou comigo."></textarea></label>
+        <label class="field">Seu nome<input id="avNome" type="text" autocomplete="given-name" maxlength="40"></label>
+        <label class="field">Seu WhatsApp (opcional)<input id="avZap" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" placeholder="(21) 99999-9999"></label>
+        <label class="confirm"><input type="checkbox" id="avLoc" checked style="width:22px;height:22px"> Incluir onde estou agora</label>
+        <p id="avErr" style="color:var(--accent);font-weight:700" hidden></p>
+        <button class="btn" type="button" id="avPost">Publicar no anúncio</button>
+      </div>
+    </div>
     <div class="panel" id="posterMatchBox" hidden>
       <h2 id="posterMatchTitle"></h2>
       <div class="pets" id="posterMatches"></div>
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v5</footer>
+  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v6</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -333,14 +349,14 @@ async function tx(mode, fn) {
 }
 const allPets = () => tx('readonly', s => s.getAll());
 const putPet = p => tx('readwrite', s => s.put(p));
-const delPet = id => tx('readwrite', s => s.delete(id));
+const getPet = id => tx('readonly', s => s.get(id));
 
 /* ---------- Modelo (em segundo plano) ---------- */
 let worker = null, seq = 0; const jobs = new Map();
 function getWorker() {
   if (!worker) {
     worker = new Worker('modelo-worker.js');
-    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); m.error ? j.rej(new Error(m.error)) : j.res(m.ok ? true : new Float32Array(m.emb)); };
+    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); if (m.error) return j.rej(new Error(m.error)); if (m.ok) return j.res(true); const e = new Float32Array(m.emb); e.esp = m.esp; j.res(e); };
     worker.onerror = () => { for (const j of jobs.values()) j.rej(new Error('worker')); jobs.clear(); worker = null; };
   }
   return worker;
@@ -429,26 +445,23 @@ async function renderPets() {
   $('petsTitle').textContent = pets.length ? `Animais cadastrados (${pets.length})` : 'Animais cadastrados';
   if (!pets.length) { list.append(el('p', 'empty', 'Nenhum animal cadastrado ainda. Para testar, cadastre um pet em "Perdi meu pet" e depois use "Encontrei um animal".')); return; }
   const tipo = chipVal('filtroTipo'), esp = chipVal('filtroEspecie'), q = semAcento($('busca').value.trim());
-  const vis = pets.filter(p => (!tipo || tipoDe(p) === tipo) && (!esp || p.especie === esp)
+  const vis = pets.filter(p => (tipo === 'arquivado' ? p.arquivado : !p.arquivado && (!tipo || tipoDe(p) === tipo)) && (!esp || p.especie === esp)
     && (!q || semAcento([p.nome, p.bairro, p.descricao, p.especie, p.contato].join(' ')).includes(q)));
   if (!vis.length) { list.append(el('p', 'empty', 'Nenhum animal com esse filtro.')); return; }
   for (const pet of vis.sort((a, b) => b.criado - a.criado)) {
     const row = el('div', 'pet'), enc = tipoDe(pet) === 'encontrado', nav = (pet.avistamentos || []).length;
     const img = el('img'); img.alt = ''; img.src = blobUrl(pet.fotos[0].thumb);
     const info = el('div', 'info');
-    const meta = [pet.especie, since(pet.data, tipoDe(pet)), pet.bairro, nav && `reconhecido ${nav}x pelo app`].filter(Boolean).join(' · ');
+    const meta = [pet.especie, since(pet.data, tipoDe(pet)), pet.bairro, nav && `${nav} avistamento${nav > 1 ? 's' : ''}`].filter(Boolean).join(' · ');
     const tags = el('div', 'tags');
-    tags.append(el('span', 'level ' + (enc ? 'hi' : 'lost'), enc ? 'Encontrado' : 'Desaparecido'));
+    tags.append(el('span', 'level ' + (pet.arquivado ? 'lo' : enc ? 'hi' : 'lost'), (enc ? 'Encontrado na rua' : 'Desaparecido') + (pet.arquivado ? ' · arquivado' : '')));
     if (pet.recompensa) tags.append(el('span', 'level rw', 'Recompensa ' + fmtReais(pet.recompensa)));
     info.append(el('b', '', nomeDe(pet)), el('span', 'meta', meta), tags);
     const ad = el('button', 'ad', 'Anúncio'); ad.type = 'button';
     ad.setAttribute('aria-label', `Ver anúncio de ${nomeDe(pet)}`); ad.onclick = () => openPoster(pet);
-    const del = document.createElement('button'); del.className = 'del'; del.type = 'button'; del.textContent = 'Excluir';
-    del.onclick = () => {
-      if (del.dataset.armed) { delPet(pet.id).then(renderPets); return; }
-      del.dataset.armed = '1'; del.textContent = 'Confirmar?'; setTimeout(() => { del.dataset.armed = ''; del.textContent = 'Excluir'; }, 3000);
-    };
-    const acts = document.createElement('div'); acts.className = 'acts'; acts.append(ad, del);
+    const ed = el('button', 'del', 'Editar'); ed.type = 'button';
+    ed.setAttribute('aria-label', `Editar ${nomeDe(pet)}`); ed.onclick = () => editar(pet);
+    const acts = el('div', 'acts'); acts.append(ad, ed);
     row.append(img, info, acts); list.append(row);
   }
 }
@@ -459,22 +472,52 @@ const TEXTOS = {
   perdido: { titulo: 'Cadastrar pet desaparecido', fotos: 'Fotos do pet', fotosNote: 'Quanto mais fotos, melhor: de frente, de lado, de corpo inteiro. Fotos antigas da galeria servem.',
     nome: 'Nome do pet', bairro: 'Bairro onde foi visto por último(a)', data: 'Visto por último(a) no dia',
     desc: 'Descrição (cor, porte, coleira, sinais)', descPh: 'Ex.: caramelo com mancha branca no peito, coleira azul, medroso' },
-  encontrado: { titulo: 'Cadastrar animal encontrado', fotos: 'Fotos do animal', fotosNote: 'Se puder, adicione mais fotos: de frente, de lado, de corpo inteiro.',
+  encontrado: { titulo: 'Cadastrar animal encontrado na rua', fotos: 'Fotos do animal', fotosNote: 'Se puder, adicione mais fotos: de frente, de lado, de corpo inteiro.',
     nome: 'Nome (se souber, pela coleira)', bairro: 'Bairro onde foi encontrado', data: 'Encontrado no dia',
     desc: 'Descrição (cor, porte, coleira, onde ele está agora)', descPh: 'Ex.: cachorro preto de porte médio, sem coleira, está comigo em casa' }
 };
-function abrirCadastro(m, itens = []) {
-  const T = TEXTOS[m]; modo = m;
+let editando = null, especieManual = false; // cadastro aberto para edição; a pessoa escolheu a espécie à mão
+function abrirCadastro(m, itens = [], pet = null) {
+  const T = TEXTOS[m]; modo = m; editando = pet; especieManual = !!pet;
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = itens; renderDraft();
-  $('formTitle').textContent = T.titulo; $('fotosTitle').textContent = T.fotos; $('fotosNote').textContent = T.fotosNote;
+  $('formTitle').textContent = pet ? `Editar ${nomeDe(pet)}` : T.titulo; $('fotosTitle').textContent = T.fotos; $('fotosNote').textContent = T.fotosNote;
   $('lNome').textContent = T.nome; $('lBairro').textContent = T.bairro; $('lData').textContent = T.data;
   $('lDesc').textContent = T.desc; $('fDesc').placeholder = T.descPh;
   $('wRecompensa').hidden = m !== 'perdido';
-  for (const id of ['fNome', 'fBairro', 'fZap', 'fRecompensa', 'fDesc', 'fContato']) $(id).value = '';
-  $('fData').value = hoje(); $('lostErr').hidden = true; show('vLost');
+  const v = pet || {};
+  $('fNome').value = v.nome || ''; $('fBairro').value = v.bairro || ''; $('fDesc').value = v.descricao || ''; $('fContato').value = v.contato || '';
+  $('fZap').value = v.zap ? maskZap(v.zap) : ''; $('fRecompensa').value = v.recompensa ? fmtReais(v.recompensa) : '';
+  $('fData').value = pet ? v.data || '' : hoje();
+  setChip('fEspecie', v.especie || 'Cachorro'); $('especieHint').hidden = true;
+  $('saveLost').textContent = pet ? 'Salvar alterações' : 'Salvar cadastro';
+  const arq = $('arqBtn'); arq.hidden = !pet; delete arq.dataset.armed;
+  arq.textContent = pet && pet.arquivado ? 'Reativar cadastro' : m === 'perdido' ? 'Arquivar (encontrei ou parei de procurar)' : 'Arquivar (o animal já voltou para casa)';
+  $('lostErr').hidden = true; show('vLost');
+  sugerirEspecie();
 }
 $('goLost').onclick = () => abrirCadastro('perdido');
-chips('fEspecie');
+function editar(pet) {
+  abrirCadastro(tipoDe(pet), pet.fotos.map(f => ({ url: URL.createObjectURL(f.foto || f.thumb), thumb: f.thumb, foto: f.foto, emb: f.emb })), pet);
+}
+$('arqBtn').onclick = async () => {
+  const b = $('arqBtn'), reativar = !!editando.arquivado;
+  if (!reativar && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Toque de novo para arquivar'; return; }
+  const pet = { ...editando, arquivado: reativar ? 0 : Date.now() };
+  try { await putPet(pet); } catch (_) { $('lostErr').hidden = false; $('lostErr').textContent = 'Não consegui salvar neste aparelho.'; return; }
+  draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null; goHome();
+};
+function setChip(id, v) { document.querySelectorAll(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === v))); }
+chips('fEspecie', () => { especieManual = true; });
+// sugere a espécie pela média das fotos (classificador do modelo); só troca se a pessoa não escolheu à mão
+function sugerirEspecie() {
+  const es = draft.map(f => f.emb && f.emb.esp).filter(Boolean);
+  if (!es.length) return;
+  const cao = es.reduce((s, e) => s + e.cao, 0) / es.length, gato = es.reduce((s, e) => s + e.gato, 0) / es.length;
+  const v = cao >= 0.5 ? 'Cachorro' : gato >= 0.5 ? 'Gato' : cao + gato < 0.1 ? 'Outro' : null;
+  const h = $('especieHint'); h.hidden = false;
+  h.textContent = v ? `Pela foto, parece ${v === 'Outro' ? 'outro tipo de animal' : v === 'Gato' ? 'um gato' : 'um cachorro'}. Se não for, toque na opção certa.` : 'Não deu para saber pela foto. Escolha a opção certa.';
+  if (v && !especieManual) setChip('fEspecie', v);
+}
 function renderDraft() {
   const box = $('lostThumbs'); box.textContent = '';
   draft.forEach((f, i) => {
@@ -490,7 +533,7 @@ function renderDraft() {
 async function addDraft(blob) {
   const item = { url: URL.createObjectURL(blob), emb: null, thumb: null, foto: null };
   draft.push(item); renderDraft();
-  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); }
+  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); sugerirEspecie(); }
   catch (e) { item.failed = true; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
   renderDraft();
 }
@@ -519,17 +562,19 @@ $('saveLost').onclick = async () => {
   $('fZap').value = maskZap($('fZap').value);
   const zap = $('fZap').value.replace(/\D/g, '');
   if (!zapValido(zap)) return falha(zap ? `O WhatsApp ${$('fZap').value} parece incompleto. Use DDD + número, por exemplo (21) 99999-9999.` : 'Digite um WhatsApp com DDD para contato, por exemplo (21) 99999-9999.', 'fZap');
-  const pet = { id: 'p' + Date.now(), criado: Date.now(), tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), data: $('fData').value,
+  const pet = { avistamentos: [], ...editando, id: editando ? editando.id : 'p' + Date.now(), criado: editando ? editando.criado : Date.now(),
+    tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), data: $('fData').value,
     descricao: $('fDesc').value.trim(), contato: $('fContato').value.trim(), zap,
-    recompensa: modo === 'perdido' ? +$('fRecompensa').value.replace(/\D/g, '') || 0 : 0, avistamentos: [],
+    recompensa: modo === 'perdido' ? +$('fRecompensa').value.replace(/\D/g, '') || 0 : 0,
     fotos: draft.map(f => ({ thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb) })) };
   try { await putPet(pet); } catch (_) { return falha('Não consegui salvar neste aparelho.'); }
-  draft.forEach(f => URL.revokeObjectURL(f.url)); draft = [];
+  draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null;
   openPoster(pet, 'vHome');
 };
 
 /* ---------- Encontrei ---------- */
 let foundUrl = null, achado = null; // foto do animal encontrado, já analisada
+const avAtual = new Map(); // pet id -> avistamento criado pela foto atual
 const fotografarAchado = () => openCamera(blob => compare(blob), 'Deixe o animal dentro do quadrado');
 $('goFound').onclick = fotografarAchado; $('againBtn').onclick = fotografarAchado;
 // semelhança de um vetor com um cadastro = foto cadastrada mais parecida
@@ -540,7 +585,7 @@ async function compare(blob) {
   $('foundImg').src = foundUrl; $('foundTitle').textContent = 'Comparando…'; $('foundSub').textContent = 'A comparação acontece no seu celular.';
   $('foundProg').hidden = false; $('matches').textContent = ''; $('shareBox').hidden = true; $('regBox').hidden = true; achado = null;
   let pets = [];
-  try { pets = (await allPets()).filter(p => tipoDe(p) === 'perdido'); } catch (_) {}
+  try { pets = (await allPets()).filter(p => tipoDe(p) === 'perdido' && !p.arquivado); } catch (_) {}
   let prep, emb;
   try { prep = await prepare(blob); emb = await embedPixels(prep.px); }
   catch (e) { $('foundProg').hidden = true; $('foundTitle').textContent = 'Não consegui analisar a foto'; $('foundSub').textContent = errMsg(e); return; }
@@ -553,10 +598,12 @@ async function compare(blob) {
   if (!pets.length) { $('foundTitle').textContent = 'Nenhum pet desaparecido cadastrado'; $('foundSub').textContent = 'Cadastre este animal como encontrado para o tutor achar.'; return; }
   $('foundTitle').textContent = achou ? `Pode ser ${nomeDe(ranked[0].p)}!` : 'Nenhum pet muito parecido';
   $('foundSub').textContent = achou ? 'Confira o anúncio e as fotos antes de avisar o tutor.' : `Comparado com ${pets.length} pet${pets.length > 1 ? 's' : ''} desaparecido${pets.length > 1 ? 's' : ''}.`;
-  // guarda o reconhecimento no cadastro do pet: ele entra no anúncio
-  const quando = Date.now();
+  // guarda o reconhecimento no anúncio do pet (thread de avistamentos); quem encontrou pode completar depois
+  const quando = Date.now(); avAtual.clear();
   for (const r of ranked) if (r.cos >= MATCH) {
-    r.p.avistamentos = [{ quando, thumb: prep.thumb, pct: toPct(r.cos) }, ...(r.p.avistamentos || [])].slice(0, 5);
+    const av = { id: 'a' + quando, quando, thumb: prep.thumb, pct: toPct(r.cos) };
+    r.p.avistamentos = [av, ...(r.p.avistamentos || [])].slice(0, 20);
+    avAtual.set(r.p.id, av.id);
     try { await putPet(r.p); } catch (_) {}
   }
   ranked.slice(0, 3).forEach((r, i) => $('matches').append(matchCard(r, { best: i === 0 && achou, volta: 'vResult', local: true })));
@@ -582,6 +629,10 @@ function matchCard(r, { best, volta, local, de }) {
   const acoes = el('div', 'row');
   const ver = el('button', 'btn small secondary', 'Ver anúncio'); ver.type = 'button'; ver.onclick = () => openPoster(p, volta);
   acoes.append(ver);
+  if (avAtual.has(p.id) && volta === 'vResult') {
+    const reg = el('button', 'btn small secondary', 'Registrar no anúncio'); reg.type = 'button';
+    reg.onclick = () => openPoster(p, volta, true); acoes.append(reg);
+  }
   if (r.cos >= MATCH && p.zap) {
     const a = el('a', 'btn small wa', p.contato ? `Falar com ${p.contato} no WhatsApp` : `Avisar ${tipoDe(p) === 'encontrado' ? 'quem encontrou' : 'o tutor'} no WhatsApp`);
     a.target = '_blank'; a.rel = 'noopener'; a.href = waLink(p, null, de);
@@ -614,12 +665,12 @@ let posterUrl = null, posterFile = null, posterText = '', posterVolta = 'vHome';
 $('posterBack').onclick = () => posterVolta === 'vHome' ? goHome() : show(posterVolta);
 function anuncioTexto(p) {
   const enc = tipoDe(p) === 'encontrado', t = [];
-  if (enc) t.push(`ENCONTRADO: ${p.especie.toLowerCase()}${p.nome ? ' chamado(a) ' + p.nome : ''}${p.bairro ? ', no bairro ' + p.bairro : ''}.${p.data ? ' Encontrado no dia: ' + fmtData(p.data) + '.' : ''}`);
+  if (enc) t.push(`ACHEI ESTE ANIMAL NA RUA e procuro o tutor: ${p.especie.toLowerCase()}${p.nome ? ' que parece se chamar ' + p.nome : ''}${p.bairro ? ', no bairro ' + p.bairro : ''}.${p.data ? ' Encontrado no dia: ' + fmtData(p.data) + '.' : ''}`);
   else t.push(`PROCURA-SE: ${p.nome} (${p.especie.toLowerCase()})${p.bairro ? ', bairro ' + p.bairro : ''}.${p.data ? ' Visto por último(a) no dia: ' + fmtData(p.data) + '.' : ''}`);
   if (p.descricao) t.push(p.descricao.replace(/([^.!?])$/, '$1.'));
   if (p.recompensa) t.push(`RECOMPENSA: ${fmtReais(p.recompensa)}.`);
   const av = (p.avistamentos || [])[0];
-  if (av) t.push(`Reconhecido pelo app Reencontro em ${fmtQuando(av.quando)}.`);
+  if (av) t.push(`Último avistamento (app Reencontro): ${fmtQuando(av.quando)}${av.texto ? ' — ' + av.texto.replace(/([^.!?])$/, '$1.') : '.'}`);
   t.push(`${enc ? 'Conhece este animal?' : 'Se você viu,'} chame ${p.contato ? p.contato + ' ' : ''}no WhatsApp ${maskZap(p.zap)}.`);
   return t.join(' ');
 }
@@ -647,9 +698,13 @@ async function drawPoster(p) {
   g.fillStyle = '#FBF3EA'; g.fillRect(0, 0, W, H);
   g.textAlign = 'center'; g.textBaseline = 'middle';
   // faixa do título
-  const titulo = enc ? 'ENCONTRADO' : 'PROCURA-SE';
-  g.fillStyle = enc ? '#1F7A4D' : '#C2410C'; g.fillRect(0, 0, W, 160);
-  g.fillStyle = '#FFFFFF'; fit(titulo, 800, 116, 960); g.fillText(titulo, W / 2, 86);
+  // animal achado na rua: título e cor próprios, para não parecer "pet perdido que já foi encontrado"
+  g.fillStyle = enc ? '#1E5AA8' : '#C2410C'; g.fillRect(0, 0, W, 160);
+  g.fillStyle = '#FFFFFF';
+  if (enc) {
+    fit('ACHEI ESTE ANIMAL', 800, 92, 960); g.fillText('ACHEI ESTE ANIMAL', W / 2, 62);
+    g.font = F(400, 40); g.fillText('Procuro o tutor ou a família', W / 2, 128);
+  } else { fit('PROCURA-SE', 800, 116, 960); g.fillText('PROCURA-SE', W / 2, 86); }
   // de baixo para cima: rodapé, recompensa e textos; as fotos ocupam o espaço que sobra
   const FOOT = 1180;
   g.fillStyle = '#2A1E16'; g.fillRect(0, FOOT, W, H - FOOT);
@@ -687,14 +742,15 @@ async function drawPoster(p) {
     if (!t.av) return;
     g.save(); rr(x, y0, w, h, 28); g.clip();
     g.fillStyle = 'rgba(31,122,77,.92)'; g.fillRect(x, y0 + h - 86, w, 86);
-    g.fillStyle = '#FFFFFF'; fit('RECONHECIDO PELO APP', 800, 28, w - 24); g.fillText('RECONHECIDO PELO APP', x + w / 2, y0 + h - 60);
+    g.fillStyle = '#FFFFFF'; fit('ÚLTIMO AVISTAMENTO', 800, 28, w - 24); g.fillText('ÚLTIMO AVISTAMENTO', x + w / 2, y0 + h - 60);
     fit(fmtQuando(t.av.quando), 400, 26, w - 24); g.fillText(fmtQuando(t.av.quando), x + w / 2, y0 + h - 26);
     g.restore();
   });
   imgs.forEach(b => b.close && b.close());
   return new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
 }
-async function openPoster(p, volta = 'vHome') {
+async function openPoster(p, volta = 'vHome', registrar = false) {
+  renderThread(p, volta);
   posterVolta = volta; show('vPoster'); $('posterMatchBox').hidden = true;
   $('posterTitle').textContent = `Anúncio de ${nomeDe(p)}`;
   $('posterNote').textContent = 'Compartilhe nos grupos do bairro, no Instagram e no Facebook. Também dá para imprimir.';
@@ -713,11 +769,61 @@ async function openPoster(p, volta = 'vHome') {
   } catch (e) { $('posterNote').textContent = 'Não consegui montar o anúncio (' + ((e && e.message) || e) + ').'; }
   $('posterProg').hidden = true;
   if (volta !== 'vResult') mostrarParecidos(p);
+  if (registrar) $('avForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
+/* ---------- Avistamentos (thread dentro do anúncio do pet desaparecido) ---------- */
+let threadPet = null;
+function renderThread(p, volta) {
+  threadPet = p;
+  const box = $('threadBox'), list = $('threadList'), avs = p.avistamentos || [];
+  box.hidden = tipoDe(p) !== 'perdido'; list.textContent = '';
+  $('threadTitle').textContent = avs.length ? `Avistamentos (${avs.length})` : 'Avistamentos';
+  if (!avs.length) list.append(el('p', 'empty', 'Ninguém registrou avistamentos ainda.'));
+  for (const av of avs) {
+    const row = el('div', 'pet'), img = el('img'); img.alt = 'Foto do avistamento'; img.src = blobUrl(av.thumb);
+    const info = el('div', 'info');
+    info.append(el('b', '', fmtQuando(av.quando)), el('span', 'meta', [av.nome && 'por ' + av.nome, av.pct && `${av.pct}% parecido`].filter(Boolean).join(' · ') || 'Reconhecido pelo app'));
+    if (av.texto) info.append(el('p', '', av.texto));
+    const links = el('div', 'tags');
+    if (av.local) { const a = el('a', 'linkish', 'Ver no mapa'); a.href = `https://maps.google.com/?q=${av.local.lat},${av.local.lng}`; a.target = '_blank'; a.rel = 'noopener'; links.append(a); }
+    if (av.zap) { const a = el('a', 'linkish', `WhatsApp ${av.nome ? 'de ' + av.nome : ''}`.trim()); a.target = '_blank'; a.rel = 'noopener';
+      a.href = `https://wa.me/55${av.zap}?text=${encodeURIComponent(`Olá${av.nome ? ', ' + av.nome : ''}! Vi o que você registrou no anúncio do(a) ${p.nome} no Reencontro.`)}`; links.append(a); }
+    if (links.childNodes.length) info.append(links);
+    row.append(img, info); list.append(row);
+  }
+  // o formulário só aparece para quem acabou de fotografar um animal parecido com este pet
+  const pode = volta === 'vResult' && avAtual.has(p.id);
+  $('avForm').hidden = !pode; $('avErr').hidden = true;
+  if (pode) for (const id of ['avTexto', 'avNome', 'avZap']) $(id).value = '';
+}
+for (const ev of ['input', 'change', 'blur']) $('avZap').addEventListener(ev, e => { e.target.value = maskZap(e.target.value); });
+$('avPost').onclick = async () => {
+  const p = threadPet, err = $('avErr'); err.hidden = true;
+  const zap = maskZap($('avZap').value).replace(/\D/g, '');
+  if (zap && !zapValido(zap)) { err.hidden = false; err.textContent = 'Confira o WhatsApp (DDD + número) ou deixe em branco.'; return; }
+  if (!$('avTexto').value.trim()) { err.hidden = false; err.textContent = 'Conte o que você viu.'; $('avTexto').focus(); return; }
+  const btn = $('avPost'); btn.disabled = true;
+  let local = null;
+  if ($('avLoc').checked && navigator.geolocation) {
+    const pos = await new Promise(res => navigator.geolocation.getCurrentPosition(x => res(x), () => res(null), { enableHighAccuracy: true, timeout: 8000 }));
+    if (pos) local = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) };
+  }
+  const extra = { texto: $('avTexto').value.trim(), nome: $('avNome').value.trim(), zap, local };
+  try {
+    const atual = (await getPet(p.id)) || p, avId = avAtual.get(p.id);
+    const avs = atual.avistamentos || [], i = avs.findIndex(a => a.id === avId);
+    if (i >= 0) avs[i] = { ...avs[i], ...extra };
+    else avs.unshift({ id: 'a' + Date.now(), quando: Date.now(), thumb: achado ? achado.thumb : atual.fotos[0].thumb, ...extra });
+    atual.avistamentos = avs; await putPet(atual);
+    avAtual.delete(p.id);
+    btn.disabled = false;
+    openPoster(atual, posterVolta);
+  } catch (_) { btn.disabled = false; err.hidden = false; err.textContent = 'Não consegui salvar neste aparelho.'; }
+};
 // cruza desaparecidos com encontrados: mostra cadastros do outro tipo parecidos com este
 async function mostrarParecidos(p) {
   let outros = [];
-  try { outros = (await allPets()).filter(o => tipoDe(o) !== tipoDe(p)); } catch (_) {}
+  try { outros = (await allPets()).filter(o => tipoDe(o) !== tipoDe(p) && !o.arquivado); } catch (_) {}
   const r = outros.map(o => p.fotos.reduce((a, f) => { const m = melhor(f.emb, o); return m.cos > a.cos ? { p: o, ...m } : a; }, { p: o, cos: -1, foto: o.fotos[0] }))
     .filter(x => x.cos >= MATCH).sort((a, b) => b.cos - a.cos).slice(0, 3);
   if (!r.length) return;

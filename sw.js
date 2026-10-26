@@ -1,6 +1,6 @@
 /* Guarda o app no aparelho. Com internet, a página e os scripts vêm sempre na versão mais nova. */
-const CACHE = 'reencontro-v5'; // mude a cada publicação para os celulares trocarem o cache
-const FILES = ['./', 'index.html', 'modelo-worker.js', 'modelo/darknet-int8.json', 'modelo/darknet-int8.bin'];
+const CACHE = 'reencontro-v6'; // mude a cada publicação para os celulares trocarem o cache
+const FILES = ['./', 'index.html', 'modelo-worker.js', 'modelo/darknet-int8.json', 'modelo/darknet-int8.bin', 'modelo/classes-int8.bin'];
 // cache: 'reload' / 'no-cache' ignoram o cache HTTP do GitHub Pages (até 10 min)
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
