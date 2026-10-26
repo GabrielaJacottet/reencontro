@@ -198,7 +198,7 @@ footer { font-size: .78em; color: var(--muted); }
       </div>
       <label class="field">Bairro onde sumiu<input id="fBairro" type="text" autocomplete="off" placeholder="Ex.: Centro"></label>
       <label class="field">Quando sumiu<input id="fData" type="date"></label>
-      <label class="field">Seu WhatsApp (com DDD)<input id="fZap" type="tel" inputmode="tel" autocomplete="tel" placeholder="Ex.: 21 99999-9999"></label>
+      <label class="field">Seu WhatsApp (com DDD)<input id="fZap" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" placeholder="(21) 99999-9999"></label>
     </div>
     <p class="error" id="lostErr" style="color:var(--accent);font-weight:700" hidden></p>
     <button class="btn" type="button" id="saveLost">Salvar cadastro</button>
@@ -284,13 +284,34 @@ let worker = null, seq = 0; const jobs = new Map();
 function getWorker() {
   if (!worker) {
     worker = new Worker('modelo-worker.js');
-    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); m.error ? j.rej(new Error(m.error)) : j.res(new Float32Array(m.emb)); };
+    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); m.error ? j.rej(new Error(m.error)) : j.res(m.ok ? true : new Float32Array(m.emb)); };
     worker.onerror = () => { for (const j of jobs.values()) j.rej(new Error('worker')); jobs.clear(); worker = null; };
   }
   return worker;
 }
+function pingModel() { return new Promise((res, rej) => { const id = ++seq; jobs.set(id, { res, rej }); try { getWorker().postMessage({ id, ping: true }); } catch (e) { jobs.delete(id); rej(e); } }); }
+function errMsg(e) {
+  const m = String((e && e.message) || e);
+  if (m.startsWith('modelo_ausente')) return 'O app não encontrou os arquivos do modelo (' + m.split(':')[1] + '). Confira se a pasta "modelo" foi enviada para o GitHub.';
+  if (m === 'modelo_incompleto') return 'O arquivo do modelo chegou incompleto. Envie de novo o darknet-int8.bin para o GitHub.';
+  if (m === 'foto') return 'Não consegui abrir essa foto. Tente outra, ou tire uma foto agora.';
+  if (m === 'worker') return 'O celular interrompeu a análise (pouca memória). Feche outros apps e tente de novo.';
+  return 'Não consegui analisar a foto (' + m + ').';
+}
 function embedPixels(px) { return new Promise((res, rej) => { const id = ++seq; jobs.set(id, { res, rej }); getWorker().postMessage({ id, pixels: px.buffer }, [px.buffer]); }); }
-async function loadBitmap(blob) { return createImageBitmap(blob, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(blob)); }
+async function loadBitmap(blob) {
+  try { return await createImageBitmap(blob, { imageOrientation: 'from-image' }); } catch (_) {}
+  try { return await createImageBitmap(blob); } catch (_) {}
+  // último recurso: deixa o próprio navegador abrir a imagem
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const c = document.createElement('canvas'); const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c;
+  } catch (_) { throw new Error('foto'); } finally { URL.revokeObjectURL(url); }
+}
 /* recorte quadrado central em 256x256 + miniatura */
 async function prepare(blob) {
   const bmp = await loadBitmap(blob);
@@ -355,7 +376,7 @@ function renderDraft() {
     const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', `Remover foto ${i + 1}`);
     x.onclick = () => { URL.revokeObjectURL(f.url); draft.splice(i, 1); renderDraft(); };
     d.append(img, x);
-    if (!f.emb) { const s = document.createElement('span'); s.className = 'busy'; s.textContent = 'analisando…'; d.append(s); }
+    if (!f.emb) { const s = document.createElement('span'); s.className = 'busy'; s.textContent = f.failed ? 'não deu certo' : 'analisando…'; d.append(s); }
     box.append(d);
   });
 }
@@ -363,19 +384,31 @@ async function addDraft(blob) {
   const item = { url: URL.createObjectURL(blob), emb: null, thumb: null };
   draft.push(item); renderDraft();
   try { const { px, thumb } = await prepare(blob); item.thumb = thumb; item.emb = await embedPixels(px); }
-  catch (e) { const i = draft.indexOf(item); if (i >= 0) draft.splice(i, 1); $('lostErr').hidden = false; $('lostErr').textContent = 'Não consegui analisar uma das fotos. Tente outra.'; }
+  catch (e) { item.failed = true; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
   renderDraft();
 }
 $('lostFiles').addEventListener('change', e => { for (const f of e.target.files) addDraft(f); e.target.value = ''; });
 $('lostCam').onclick = () => openCamera(blob => addDraft(blob), 'Deixe o seu pet dentro do quadrado');
+function maskZap(v) {
+  const d = v.replace(/\D/g, '').replace(/^0+/, '').slice(0, 11);
+  if (d.length <= 2) return d.length ? '(' + d : '';
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+function zapValido(d) { return /^[1-9][1-9](9\d{8}|[2-5]\d{7})$/.test(d); }
+$('fZap').addEventListener('input', e => { const el = e.target; el.value = maskZap(el.value); });
 $('saveLost').onclick = async () => {
   const err = $('lostErr'); err.hidden = true;
   const nome = $('fNome').value.trim();
   if (!draft.length) { err.hidden = false; err.textContent = 'Adicione pelo menos uma foto do pet.'; return; }
+  if (draft.some(f => f.failed)) { err.hidden = false; err.textContent = 'Remova as fotos marcadas com "não deu certo" (toque no ×).'; return; }
   if (draft.some(f => !f.emb)) { err.hidden = false; err.textContent = 'Espere terminar de analisar as fotos.'; return; }
   if (!nome) { err.hidden = false; err.textContent = 'Escreva o nome do pet.'; $('fNome').focus(); return; }
+  const zap = $('fZap').value.replace(/\D/g, '');
+  if (!zapValido(zap)) { err.hidden = false; err.textContent = 'Digite um WhatsApp válido com DDD, por exemplo (21) 99999-9999.'; $('fZap').focus(); return; }
   const especie = document.querySelector('#fEspecie [aria-pressed="true"]').dataset.v;
-  const pet = { id: 'p' + Date.now(), criado: Date.now(), nome, especie, bairro: $('fBairro').value.trim(), data: $('fData').value, zap: $('fZap').value.replace(/\D/g, ''),
+  const pet = { id: 'p' + Date.now(), criado: Date.now(), nome, especie, bairro: $('fBairro').value.trim(), data: $('fData').value, zap,
     fotos: draft.map(f => ({ thumb: f.thumb, emb: Array.from(f.emb) })) };
   try { await putPet(pet); } catch (_) { err.hidden = false; err.textContent = 'Não consegui salvar neste aparelho.'; return; }
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = [];
@@ -395,7 +428,7 @@ async function compare(blob) {
   try { pets = await allPets(); } catch (_) {}
   let emb;
   try { emb = await embedPixels((await prepare(blob)).px); }
-  catch (_) { $('foundProg').hidden = true; $('foundTitle').textContent = 'Não consegui analisar a foto'; $('foundSub').textContent = 'Tente de novo, com mais luz.'; return; }
+  catch (e) { $('foundProg').hidden = true; $('foundTitle').textContent = 'Não consegui analisar a foto'; $('foundSub').textContent = errMsg(e); return; }
   $('foundProg').hidden = true;
   if (!pets.length) { $('foundTitle').textContent = 'Nenhum pet cadastrado'; $('foundSub').textContent = 'Para testar, cadastre antes um pet em "Perdi meu pet".'; return; }
   const ranked = pets.map(p => ({ p, cos: Math.max(...p.fotos.map(f => dot(emb, f.emb))) })).sort((a, b) => b.cos - a.cos);
@@ -487,6 +520,10 @@ $('shutter').onclick = async () => {
 };
 
 renderPets();
+pingModel().catch(e => {
+  const b = document.createElement('p'); b.className = 'panel'; b.style.color = 'var(--accent)'; b.style.fontWeight = '700';
+  b.textContent = errMsg(e); $('vHome').prepend(b);
+});
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
 </script>

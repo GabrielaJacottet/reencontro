@@ -5,10 +5,14 @@ let layers = null;
 
 async function load() {
   if (layers) return;
-  const [meta, buf] = await Promise.all([
-    fetch('modelo/darknet-int8.json').then(r => r.json()),
-    fetch('modelo/darknet-int8.bin').then(r => r.arrayBuffer()),
-  ]);
+  const get = async (nome, tipo) => {
+    for (const caminho of ['modelo/' + nome, nome]) {
+      try { const r = await fetch(caminho); if (r.ok) return tipo === 'json' ? await r.json() : await r.arrayBuffer(); } catch (_) {}
+    }
+    throw new Error('modelo_ausente:' + nome);
+  };
+  const [meta, buf] = await Promise.all([get('darknet-int8.json', 'json'), get('darknet-int8.bin', 'bin')]);
+  if (buf.byteLength < 6000000) throw new Error('modelo_incompleto');
   layers = meta.layers.map(m => {
     const { cin, cout, off } = m;
     const scale = new Float32Array(buf.slice(off, off + 4 * cout));
@@ -67,9 +71,10 @@ function embed(pixels) {
 }
 
 self.onmessage = async ev => {
-  const { id, pixels } = ev.data || {};
+  const { id, pixels, ping } = ev.data || {};
   try {
     await load();
+    if (ping) { postMessage({ id, ok: true }); return; }
     const f = embed(new Float32Array(pixels));
     postMessage({ id, emb: f.buffer }, [f.buffer]);
   } catch (e) {
