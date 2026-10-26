@@ -1,0 +1,41 @@
+{
+ "input": 256,
+ "layers": [
+  {
+   "cin": 3,
+   "cout": 16,
+   "off": 0
+  },
+  {
+   "cin": 16,
+   "cout": 32,
+   "off": 560
+  },
+  {
+   "cin": 32,
+   "cout": 64,
+   "off": 5424
+  },
+  {
+   "cin": 64,
+   "cout": 128,
+   "off": 24368
+  },
+  {
+   "cin": 128,
+   "cout": 256,
+   "off": 99120
+  },
+  {
+   "cin": 256,
+   "cout": 512,
+   "off": 396080
+  },
+  {
+   "cin": 512,
+   "cout": 1024,
+   "off": 1579824
+  }
+ ],
+ "fonte": "DarkNet Reference (ml5.js, licen\u00e7a MIT), BatchNorm incorporada e pesos em int8"
+}
