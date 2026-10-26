@@ -282,7 +282,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v4</footer>
+  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v5</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -506,7 +506,7 @@ function maskZap(v) {
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
 function zapValido(d) { return /^[1-9][1-9](9\d{8}|[2-9]\d{7})$/.test(d); }
-$('fZap').addEventListener('input', e => { const el = e.target; el.value = maskZap(el.value); });
+for (const ev of ['input', 'change', 'blur']) $('fZap').addEventListener(ev, e => { e.target.value = maskZap(e.target.value); }); // 'change' pega o preenchimento automático
 $('fRecompensa').addEventListener('input', e => { const d = e.target.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 6); e.target.value = d ? fmtReais(+d) : ''; });
 $('saveLost').onclick = async () => {
   const err = $('lostErr'); err.hidden = true;
@@ -516,8 +516,9 @@ $('saveLost').onclick = async () => {
   if (draft.some(f => f.failed)) return falha('Remova as fotos marcadas com "não deu certo" (toque no ×).');
   if (draft.some(f => !f.emb)) return falha('Espere terminar de analisar as fotos.');
   if (!nome && modo === 'perdido') return falha('Escreva o nome do pet.', 'fNome');
+  $('fZap').value = maskZap($('fZap').value);
   const zap = $('fZap').value.replace(/\D/g, '');
-  if (!zapValido(zap)) return falha('Digite um WhatsApp válido com DDD, por exemplo (21) 99999-9999.', 'fZap');
+  if (!zapValido(zap)) return falha(zap ? `O WhatsApp ${$('fZap').value} parece incompleto. Use DDD + número, por exemplo (21) 99999-9999.` : 'Digite um WhatsApp com DDD para contato, por exemplo (21) 99999-9999.', 'fZap');
   const pet = { id: 'p' + Date.now(), criado: Date.now(), tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), data: $('fData').value,
     descricao: $('fDesc').value.trim(), contato: $('fContato').value.trim(), zap,
     recompensa: modo === 'perdido' ? +$('fRecompensa').value.replace(/\D/g, '') || 0 : 0, avistamentos: [],
