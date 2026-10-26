@@ -90,6 +90,10 @@ label.field input { min-height: 52px; border-radius: 12px; border: 1.5px solid v
 .pet .info b { display: block; font-size: 1.05em; }
 .pet .info span { color: var(--muted); font-size: .85em; }
 .pet .del { border: 0; background: none; color: var(--muted); font-weight: 700; text-decoration: underline; padding: 8px; }
+.pet .acts { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.pet .ad { min-height: 40px; padding: 0 12px; border-radius: 12px; border: 0; background: var(--soft); font-weight: 800; font-size: .88em; }
+.poster { width: 100%; aspect-ratio: 4 / 5; border-radius: 18px; border: 1.5px solid var(--line); display: block; background: var(--soft); object-fit: cover; }
+.tags { display: flex; gap: 8px; flex-wrap: wrap; }
 .empty { color: var(--muted); font-size: .92em; }
 
 /* Resultado */
@@ -109,6 +113,7 @@ label.field input { min-height: 52px; border-radius: 12px; border: 1.5px solid v
 .level.hi { background: var(--good-bg); color: var(--good); }
 .level.md { background: var(--mid-bg); color: var(--mid); }
 .level.lo { background: var(--low-bg); color: var(--muted); }
+.level.rw { background: var(--mid-bg); color: var(--mid); }
 .wa { background: #1F8F55; color: #fff; }
 .progress { height: 12px; border-radius: 6px; background: var(--soft); overflow: hidden; }
 .progress i { display: block; height: 100%; width: 40%; background: var(--accent); border-radius: 6px; animation: slide 1.1s ease-in-out infinite; }
@@ -199,6 +204,7 @@ footer { font-size: .78em; color: var(--muted); }
       <label class="field">Bairro onde sumiu<input id="fBairro" type="text" autocomplete="off" placeholder="Ex.: Centro"></label>
       <label class="field">Quando sumiu<input id="fData" type="date"></label>
       <label class="field">Seu WhatsApp (com DDD)<input id="fZap" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" placeholder="(21) 99999-9999"></label>
+      <label class="field">Recompensa (opcional)<input id="fRecompensa" type="text" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="Ex.: R$ 200"></label>
     </div>
     <p class="error" id="lostErr" style="color:var(--accent);font-weight:700" hidden></p>
     <button class="btn" type="button" id="saveLost">Salvar cadastro</button>
@@ -226,7 +232,23 @@ footer { font-size: .78em; color: var(--muted); }
     <button class="btn secondary" type="button" id="againBtn">Tirar outra foto</button>
   </section>
 
-  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v2</footer>
+  <!-- ============ ANÚNCIO ============ -->
+  <section class="view" id="vPoster" hidden>
+    <div class="top">
+      <button class="back" type="button" data-home aria-label="Voltar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg></button>
+      <h1 id="posterTitle">Anúncio</h1>
+    </div>
+    <p class="note" id="posterNote">Compartilhe nos grupos do bairro, no Instagram e no Facebook. Também dá para imprimir.</p>
+    <div class="progress" id="posterProg"><i></i></div>
+    <img class="poster" id="posterImg" alt="" hidden>
+    <div class="row">
+      <button class="btn" type="button" id="posterShare">Compartilhar</button>
+      <a class="btn secondary" id="posterDown" href="#" download="anuncio.jpg">Baixar imagem</a>
+    </div>
+    <button class="btn small secondary" type="button" id="posterCopy">Copiar texto do anúncio</button>
+  </section>
+
+  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v3</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -323,14 +345,18 @@ async function prepare(blob) {
   for (let i = 0, j = 0; i < d.length; i += 4) { px[j++] = d[i] / 255; px[j++] = d[i + 1] / 255; px[j++] = d[i + 2] / 255; }
   const t = document.createElement('canvas'); t.width = t.height = 320;
   t.getContext('2d').drawImage(bmp, sx, sy, s, s, 0, 0, 320, 320);
-  if (bmp.close) bmp.close();
   const thumb = await new Promise(r => t.toBlob(r, 'image/jpeg', 0.85));
-  return { px, thumb };
+  // versão maior para o anúncio
+  const L = Math.min(1080, s), big = document.createElement('canvas'); big.width = big.height = L;
+  big.getContext('2d').drawImage(bmp, sx, sy, s, s, 0, 0, L, L);
+  if (bmp.close) bmp.close();
+  const foto = await new Promise(r => big.toBlob(r, 'image/jpeg', 0.85));
+  return { px, thumb, foto };
 }
 const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
 
 /* ---------- Navegação ---------- */
-function show(v) { for (const id of ['vHome', 'vLost', 'vResult']) $(id).hidden = id !== v; window.scrollTo(0, 0); }
+function show(v) { for (const id of ['vHome', 'vLost', 'vResult', 'vPoster']) $(id).hidden = id !== v; window.scrollTo(0, 0); }
 document.querySelectorAll('[data-home]').forEach(b => b.onclick = () => { show('vHome'); renderPets(); });
 
 /* ---------- Lista de pets ---------- */
@@ -341,6 +367,8 @@ function since(d) {
   const days = Math.floor((Date.now() - new Date(d + 'T12:00:00').getTime()) / 864e5);
   return days <= 0 ? 'sumiu hoje' : days === 1 ? 'sumiu ontem' : `sumiu há ${days} dias`;
 }
+const fmtReais = n => 'R$ ' + n.toLocaleString('pt-BR');
+const fmtData = d => d ? d.split('-').reverse().join('/') : '';
 async function renderPets() {
   while (urls.length) URL.revokeObjectURL(urls.pop());
   const list = $('petList'); list.textContent = '';
@@ -353,20 +381,23 @@ async function renderPets() {
     const img = document.createElement('img'); img.alt = ''; img.src = blobUrl(pet.fotos[0].thumb);
     const info = document.createElement('div'); info.className = 'info';
     const b = document.createElement('b'); b.textContent = pet.nome;
-    const sp = document.createElement('span'); sp.textContent = [pet.especie, since(pet.data), pet.bairro, `${pet.fotos.length} foto${pet.fotos.length > 1 ? 's' : ''}`].filter(Boolean).join(' · ');
+    const sp = document.createElement('span'); sp.textContent = [pet.especie, since(pet.data), pet.bairro, pet.recompensa && 'recompensa ' + fmtReais(pet.recompensa), `${pet.fotos.length} foto${pet.fotos.length > 1 ? 's' : ''}`].filter(Boolean).join(' · ');
     info.append(b, sp);
+    const ad = document.createElement('button'); ad.className = 'ad'; ad.type = 'button'; ad.textContent = 'Anúncio';
+    ad.setAttribute('aria-label', `Gerar anúncio de ${pet.nome}`); ad.onclick = () => openPoster(pet);
     const del = document.createElement('button'); del.className = 'del'; del.type = 'button'; del.textContent = 'Excluir';
     del.onclick = () => {
       if (del.dataset.armed) { delPet(pet.id).then(renderPets); return; }
       del.dataset.armed = '1'; del.textContent = 'Confirmar?'; setTimeout(() => { del.dataset.armed = ''; del.textContent = 'Excluir'; }, 3000);
     };
-    row.append(img, info, del); list.append(row);
+    const acts = document.createElement('div'); acts.className = 'acts'; acts.append(ad, del);
+    row.append(img, info, acts); list.append(row);
   }
 }
 
 /* ---------- Cadastro ---------- */
 let draft = [];
-$('goLost').onclick = () => { draft = []; renderDraft(); for (const id of ['fNome', 'fBairro', 'fZap']) $(id).value = ''; $('fData').value = new Date().toISOString().slice(0, 10); $('lostErr').hidden = true; show('vLost'); };
+$('goLost').onclick = () => { draft = []; renderDraft(); for (const id of ['fNome', 'fBairro', 'fZap', 'fRecompensa']) $(id).value = ''; $('fData').value = new Date().toISOString().slice(0, 10); $('lostErr').hidden = true; show('vLost'); };
 document.querySelectorAll('#fEspecie button').forEach(b => b.onclick = () => document.querySelectorAll('#fEspecie button').forEach(x => x.setAttribute('aria-pressed', String(x === b))));
 function renderDraft() {
   const box = $('lostThumbs'); box.textContent = '';
@@ -381,23 +412,26 @@ function renderDraft() {
   });
 }
 async function addDraft(blob) {
-  const item = { url: URL.createObjectURL(blob), emb: null, thumb: null };
+  const item = { url: URL.createObjectURL(blob), emb: null, thumb: null, foto: null };
   draft.push(item); renderDraft();
-  try { const { px, thumb } = await prepare(blob); item.thumb = thumb; item.emb = await embedPixels(px); }
+  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); }
   catch (e) { item.failed = true; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
   renderDraft();
 }
 $('lostFiles').addEventListener('change', e => { for (const f of e.target.files) addDraft(f); e.target.value = ''; });
 $('lostCam').onclick = () => openCamera(blob => addDraft(blob), 'Deixe o seu pet dentro do quadrado');
 function maskZap(v) {
-  const d = v.replace(/\D/g, '').replace(/^0+/, '').slice(0, 11);
+  let d = v.replace(/\D/g, '').replace(/^0+/, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2); // +55 do preenchimento automático
+  d = d.slice(0, 11);
   if (d.length <= 2) return d.length ? '(' + d : '';
   if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
   if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
-function zapValido(d) { return /^[1-9][1-9](9\d{8}|[2-5]\d{7})$/.test(d); }
+function zapValido(d) { return /^[1-9][1-9](9\d{8}|[2-9]\d{7})$/.test(d); }
 $('fZap').addEventListener('input', e => { const el = e.target; el.value = maskZap(el.value); });
+$('fRecompensa').addEventListener('input', e => { const d = e.target.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 6); e.target.value = d ? fmtReais(+d) : ''; });
 $('saveLost').onclick = async () => {
   const err = $('lostErr'); err.hidden = true;
   const nome = $('fNome').value.trim();
@@ -409,10 +443,11 @@ $('saveLost').onclick = async () => {
   if (!zapValido(zap)) { err.hidden = false; err.textContent = 'Digite um WhatsApp válido com DDD, por exemplo (21) 99999-9999.'; $('fZap').focus(); return; }
   const especie = document.querySelector('#fEspecie [aria-pressed="true"]').dataset.v;
   const pet = { id: 'p' + Date.now(), criado: Date.now(), nome, especie, bairro: $('fBairro').value.trim(), data: $('fData').value, zap,
-    fotos: draft.map(f => ({ thumb: f.thumb, emb: Array.from(f.emb) })) };
+    recompensa: +$('fRecompensa').value.replace(/\D/g, '') || 0,
+    fotos: draft.map(f => ({ thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb) })) };
   try { await putPet(pet); } catch (_) { err.hidden = false; err.textContent = 'Não consegui salvar neste aparelho.'; return; }
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = [];
-  show('vHome'); renderPets();
+  openPoster(pet);
 };
 
 /* ---------- Encontrei ---------- */
@@ -451,8 +486,10 @@ async function compare(blob) {
     const pct = document.createElement('div'); pct.className = 'pct'; pct.textContent = toPct(r.cos) + '%';
     head.append(img, info, pct);
     const bar = document.createElement('div'); bar.className = 'bar'; const bi = document.createElement('i'); bi.style.width = toPct(r.cos) + '%'; bar.append(bi);
-    const tag = document.createElement('span'); tag.className = 'level ' + lv; tag.textContent = lvTxt;
-    card.append(head, bar, tag);
+    const tags = document.createElement('div'); tags.className = 'tags';
+    const tag = document.createElement('span'); tag.className = 'level ' + lv; tag.textContent = lvTxt; tags.append(tag);
+    if (r.p.recompensa) { const rw = document.createElement('span'); rw.className = 'level rw'; rw.textContent = 'Recompensa ' + fmtReais(r.p.recompensa); tags.append(rw); }
+    card.append(head, bar, tags);
     if (r.cos >= MATCH && r.p.zap) {
       const a = document.createElement('a'); a.className = 'btn small wa'; a.target = '_blank'; a.rel = 'noopener';
       a.textContent = `Avisar o tutor de ${r.p.nome} no WhatsApp`;
@@ -476,6 +513,90 @@ function waLink(p, pos) {
   msg += '.';
   return `https://wa.me/${num}?text=${encodeURIComponent(msg)}`;
 }
+
+/* ---------- Anúncio (imagem 1080x1350 para redes sociais e impressão) ---------- */
+let posterUrl = null, posterFile = null, posterText = '';
+function anuncioTexto(p) {
+  let t = `PROCURA-SE: ${p.nome} (${p.especie.toLowerCase()})`;
+  if (p.bairro) t += `, sumiu no bairro ${p.bairro}`;
+  if (p.data) t += ` em ${fmtData(p.data)}`;
+  t += '.';
+  if (p.recompensa) t += ` Recompensa: ${fmtReais(p.recompensa)}.`;
+  return t + ` Se você viu, chame no WhatsApp ${maskZap(p.zap)}.`;
+}
+async function drawPoster(p) {
+  const F = (w, s) => `${w} ${s}px "Nunito Sans", system-ui, sans-serif`;
+  try { await Promise.all([document.fonts.load(F(800, 80)), document.fonts.load(F(400, 40))]); } catch (_) {}
+  const W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const rr = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+  const fit = (txt, w, max, maxW) => { let s = max; g.font = F(w, s); while (g.measureText(txt).width > maxW && s > 24) { s -= 4; g.font = F(w, s); } };
+  const cover = (img, x, y, w, h) => {
+    const k = Math.max(w / img.width, h / img.height), sw = w / k, sh = h / k;
+    g.save(); rr(x, y, w, h, 28); g.clip();
+    g.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x, y, w, h); g.restore();
+  };
+  g.fillStyle = '#FBF3EA'; g.fillRect(0, 0, W, H);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  // faixa do título
+  g.fillStyle = '#C2410C'; g.fillRect(0, 0, W, 180);
+  g.fillStyle = '#FFFFFF'; fit('PROCURA-SE', 800, 120, 960); g.fillText('PROCURA-SE', W / 2, 96);
+  // fotos: 1 grande, 2 lado a lado ou 1 grande + 2 pequenas
+  const imgs = await Promise.all(p.fotos.slice(0, 3).map(f => createImageBitmap(f.foto || f.thumb)));
+  if (imgs.length >= 3) { cover(imgs[0], 60, 220, 640, 640); cover(imgs[1], 720, 220, 300, 310); cover(imgs[2], 720, 550, 300, 310); }
+  else if (imgs.length === 2) { cover(imgs[0], 60, 220, 470, 640); cover(imgs[1], 550, 220, 470, 640); }
+  else cover(imgs[0], 60, 220, 960, 640);
+  imgs.forEach(b => b.close && b.close());
+  // nome, dados e recompensa
+  const dados = [p.especie, p.bairro && 'Bairro ' + p.bairro, p.data && 'desde ' + fmtData(p.data)].filter(Boolean).join(' · ');
+  const y0 = p.recompensa ? 935 : 965;
+  g.fillStyle = '#2A1E16'; fit(p.nome, 800, 110, 960); g.fillText(p.nome, W / 2, y0);
+  g.fillStyle = '#6B5A4C'; fit(dados, 400, 44, 960); g.fillText(dados, W / 2, y0 + 80);
+  if (p.recompensa) {
+    const t = 'RECOMPENSA ' + fmtReais(p.recompensa); fit(t, 800, 56, 860);
+    const w = g.measureText(t).width + 80;
+    g.fillStyle = '#FFE08A'; rr((W - w) / 2, 1055, w, 90, 45); g.fill();
+    g.fillStyle = '#5C3B00'; g.fillText(t, W / 2, 1102);
+  }
+  // rodapé com o contato
+  g.fillStyle = '#2A1E16'; g.fillRect(0, 1180, W, 170);
+  g.fillStyle = '#FFFFFF'; g.font = F(400, 40); g.fillText('Viu este animal? Chame no WhatsApp', W / 2, 1232);
+  g.font = F(800, 76); g.fillText(maskZap(p.zap), W / 2, 1300);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+}
+async function openPoster(p) {
+  show('vPoster');
+  $('posterTitle').textContent = `Anúncio de ${p.nome}`;
+  $('posterNote').textContent = 'Compartilhe nos grupos do bairro, no Instagram e no Facebook. Também dá para imprimir.';
+  $('posterImg').hidden = true; $('posterProg').hidden = false;
+  for (const id of ['posterShare', 'posterCopy']) $(id).disabled = true;
+  $('posterDown').hidden = true;
+  posterText = anuncioTexto(p);
+  try {
+    const blob = await drawPoster(p);
+    const nome = 'procura-se-' + p.nome.normalize('NFD').replace(/[^\w]+/g, '-').toLowerCase() + '.jpg';
+    posterFile = new File([blob], nome, { type: 'image/jpeg' });
+    if (posterUrl) URL.revokeObjectURL(posterUrl); posterUrl = URL.createObjectURL(blob);
+    const img = $('posterImg'); img.src = posterUrl; img.alt = `Anúncio de ${p.nome}: ${posterText}`; img.hidden = false;
+    const a = $('posterDown'); a.href = posterUrl; a.download = nome; a.hidden = false;
+    for (const id of ['posterShare', 'posterCopy']) $(id).disabled = false;
+  } catch (e) { $('posterNote').textContent = 'Não consegui montar o anúncio (' + ((e && e.message) || e) + ').'; }
+  $('posterProg').hidden = true;
+}
+async function copiarTexto(btn) {
+  try { await navigator.clipboard.writeText(posterText); btn.textContent = 'Texto copiado!'; }
+  catch (_) { btn.textContent = 'Não consegui copiar'; }
+  setTimeout(() => { btn.textContent = 'Copiar texto do anúncio'; }, 2500);
+}
+$('posterCopy').onclick = () => copiarTexto($('posterCopy'));
+$('posterShare').onclick = async () => {
+  if (navigator.canShare && navigator.canShare({ files: [posterFile] })) {
+    try { await navigator.share({ files: [posterFile], text: posterText }); } catch (_) {}
+    return;
+  }
+  // sem compartilhamento de arquivos: baixa a imagem e copia o texto
+  $('posterDown').click(); copiarTexto($('posterCopy'));
+};
 
 /* ---------- Câmera ao vivo ---------- */
 let stream = null, onShot = null;
