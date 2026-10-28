@@ -3,7 +3,7 @@
 'use strict';
 const PASTA = 'modelo/', ARQ = 'dinov2-small-q8.onnx', TAM = 224;
 const MEDIA = [0.485, 0.456, 0.406], DESVIO = [0.229, 0.224, 0.225];
-let sessao = null, pronto = null, fila = Promise.resolve();
+let sessao = null, filtro = null, pronto = null, fila = Promise.resolve();
 
 async function carregar() {
   if (typeof ort === 'undefined') {
@@ -16,6 +16,13 @@ async function carregar() {
   const buf = await r.arrayBuffer();
   if (buf.byteLength < 24000000) throw new Error('modelo_incompleto');
   sessao = await ort.InferenceSession.create(new Uint8Array(buf), { executionProviders: ['wasm'] });
+  // "é foto de um animal?": regressão logística sobre o mesmo vetor; sem o arquivo, não filtra
+  try { const f = await fetch(PASTA + 'filtro-animal.json'); if (f.ok) filtro = await f.json(); } catch (_) {}
+}
+function chanceAnimal(v) {
+  if (!filtro) return null;
+  let z = filtro.b; for (let i = 0; i < v.length; i++) z += filtro.w[i] * v[i];
+  return 1 / (1 + Math.exp(-z));
 }
 const load = () => pronto || (pronto = carregar().catch(e => { pronto = null; throw e; }));
 
@@ -37,8 +44,8 @@ self.onmessage = async ev => {
   try {
     await load();
     if (ping) { postMessage({ id, ok: true }); return; }
-    const f = await embed(new Float32Array(pixels));
-    postMessage({ id, emb: f.buffer }, [f.buffer]);
+    const f = await embed(new Float32Array(pixels)), animal = chanceAnimal(f);
+    postMessage({ id, emb: f.buffer, animal }, [f.buffer]);
   } catch (e) {
     postMessage({ id, error: String((e && e.message) || e) });
   }

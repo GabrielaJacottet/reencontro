@@ -306,7 +306,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v11</footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v12</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -337,6 +337,9 @@ const $ = id => document.getElementById(id);
    A porcentagem mostrada é uma escala: 0,42 = 60%, 0,55 = 80%. */
 const toPct = cos => Math.round(Math.max(0, Math.min(1, (cos - 0.03) / 0.65)) * 100);
 const MATCH = 0.42; // abaixo disso não sugerimos avisar o tutor
+// "é foto de um animal?" (modelo/filtro-animal.json); abaixo disso a foto é recusada no cadastro e na busca
+const ANIMAL_MIN = 0.35;
+const naoAnimal = r => r.animal != null && r.animal < ANIMAL_MIN;
 const level = cos => cos >= 0.55 ? ['hi', 'Muito parecido'] : cos >= MATCH ? ['md', 'Parecido'] : ['lo', 'Pouco parecido'];
 const VERSAO = 2; // muda quando o modelo muda; fotos cadastradas com outra versão são analisadas de novo
 
@@ -366,7 +369,7 @@ let worker = null, seq = 0; const jobs = new Map();
 function getWorker() {
   if (!worker) {
     worker = new Worker('modelo-worker.js');
-    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); m.error ? j.rej(new Error(m.error)) : j.res(m.ok ? true : new Float32Array(m.emb)); };
+    worker.onmessage = ev => { const m = ev.data; const j = jobs.get(m.id); if (!j) return; jobs.delete(m.id); m.error ? j.rej(new Error(m.error)) : j.res(m.ok ? true : { emb: new Float32Array(m.emb), animal: m.animal }); };
     worker.onerror = () => { for (const j of jobs.values()) j.rej(new Error('worker')); jobs.clear(); worker = null; };
   }
   return worker;
@@ -377,6 +380,7 @@ function errMsg(e) {
   if (m.startsWith('modelo_ausente')) return 'O app não encontrou os arquivos do modelo (' + m.split(':')[1] + '). Confira se a pasta "modelo" foi enviada para o GitHub.';
   if (m === 'modelo_incompleto') return 'O arquivo do modelo chegou incompleto. Envie de novo o dinov2-small-q8.onnx para o GitHub.';
   if (m === 'foto') return 'Não consegui abrir essa foto. Tente outra, ou tire uma foto agora.';
+  if (m === 'nao_animal') return 'Essa foto não parece ser de um animal. Use uma foto em que o animal apareça bem e ocupe boa parte da imagem (toque no × para remover).';
   if (m === 'worker') return 'O celular interrompeu a análise (pouca memória). Feche outros apps e tente de novo.';
   return 'Não consegui analisar a foto (' + m + ').';
 }
@@ -427,7 +431,7 @@ function atualizarCadastros() {
     for (const p of await allPets()) {
       if (p.fotos.every(f => f.v === VERSAO)) continue;
       for (const f of p.fotos) if (f.v !== VERSAO) {
-        try { const bmp = await loadBitmap(f.foto || f.thumb); const px = pixelsDe(bmp); if (bmp.close) bmp.close(); f.emb = Array.from(await embedPixels(px)); f.v = VERSAO; } catch (_) {}
+        try { const bmp = await loadBitmap(f.foto || f.thumb); const px = pixelsDe(bmp); if (bmp.close) bmp.close(); f.emb = Array.from((await embedPixels(px)).emb); f.v = VERSAO; } catch (_) {}
       }
       // relê o cadastro para não desfazer uma edição feita enquanto isso
       const atual = await getPet(p.id);
@@ -561,15 +565,18 @@ function renderDraft() {
     const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', `Remover foto ${i + 1}`);
     x.onclick = () => { URL.revokeObjectURL(f.url); draft.splice(i, 1); renderDraft(); };
     d.append(img, x);
-    if (!f.emb) { const s = document.createElement('span'); s.className = 'busy'; s.textContent = f.failed ? 'não deu certo' : 'analisando…'; d.append(s); }
+    if (!f.emb) { const s = document.createElement('span'); s.className = 'busy'; s.textContent = f.failed || 'analisando…'; d.append(s); }
     box.append(d);
   });
 }
 async function addDraft(blob) {
   const item = { url: URL.createObjectURL(blob), emb: null, thumb: null, foto: null };
   draft.push(item); renderDraft();
-  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); item.v = VERSAO; }
-  catch (e) { item.failed = true; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
+  try {
+    const { px, thumb, foto } = await prepare(blob), r = await embedPixels(px);
+    if (naoAnimal(r)) throw new Error('nao_animal');
+    item.thumb = thumb; item.foto = foto; item.emb = r.emb; item.v = VERSAO;
+  } catch (e) { item.failed = e && e.message === 'nao_animal' ? 'não é animal' : 'não deu certo'; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
   renderDraft();
 }
 $('lostFiles').addEventListener('change', e => { for (const f of e.target.files) addDraft(f); e.target.value = ''; });
@@ -591,7 +598,7 @@ $('saveLost').onclick = async () => {
   const falha = (msg, foco) => { err.hidden = false; err.textContent = msg; if (foco) $(foco).focus(); };
   const nome = $('fNome').value.trim();
   if (!draft.length) return falha('Adicione pelo menos uma foto.');
-  if (draft.some(f => f.failed)) return falha('Remova as fotos marcadas com "não deu certo" (toque no ×).');
+  if (draft.some(f => f.failed)) return falha('Remova as fotos marcadas com "não deu certo" ou "não é animal" (toque no ×).');
   if (draft.some(f => !f.emb)) return falha('Espere terminar de analisar as fotos.');
   if (!nome && modo === 'perdido') return falha('Escreva o nome do pet.', 'fNome');
   $('fZap').value = maskZap($('fZap').value);
@@ -623,10 +630,12 @@ async function compare(blob) {
   let pets = [];
   await atualizarCadastros();
   try { pets = (await allPets()).filter(p => tipoDe(p) === 'perdido' && !p.arquivado && !p.reencontrado && comparavel(p)); } catch (_) {}
-  let prep, emb;
-  try { prep = await prepare(blob); emb = await embedPixels(prep.px); }
+  let prep, emb, r;
+  try { prep = await prepare(blob); r = await embedPixels(prep.px); emb = r.emb; }
   catch (e) { $('foundProg').hidden = true; $('foundTitle').textContent = 'Não consegui analisar a foto'; $('foundSub').textContent = errMsg(e); return; }
   $('foundProg').hidden = true;
+  // sem animal na foto: não compara nem deixa cadastrar
+  if (naoAnimal(r)) { $('foundTitle').textContent = 'Não encontrei um animal nessa foto'; $('foundSub').textContent = 'Tente de novo com o animal bem visível dentro do quadrado.'; return; }
   achado = { thumb: prep.thumb, foto: prep.foto, emb };
   const ranked = pets.map(p => ({ p, ...melhor(emb, p) })).sort((a, b) => b.cos - a.cos);
   const achou = ranked.length > 0 && ranked[0].cos >= MATCH;
