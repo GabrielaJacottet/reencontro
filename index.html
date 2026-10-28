@@ -304,7 +304,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v9</footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v10</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -662,13 +662,19 @@ function matchCard(r, { best, volta, local, de }) {
     if (local) a.onclick = async ev => {
       if (!$('withLoc').checked || !navigator.geolocation) return;
       ev.preventDefault();
-      const pos = await new Promise(res => navigator.geolocation.getCurrentPosition(x => res(x), () => res(null), { enableHighAccuracy: true, timeout: 8000 }));
-      location.href = waLink(p, pos, de);
+      location.href = waLink(p, (await pegarLocal()).pos, de); // sem localização, o aviso vai sem o link do mapa
     };
     acoes.append(a);
   }
   card.append(acoes);
   return card;
+}
+// localização do aparelho: tenta a precisa (GPS); se demorar ou falhar, aceita a aproximada (rede) ou uma recente
+function pegarLocal() {
+  if (!navigator.geolocation) return Promise.resolve({ erro: 0 });
+  const tenta = opts => new Promise(res => navigator.geolocation.getCurrentPosition(pos => res({ pos }), e => res({ erro: e.code }), opts));
+  return tenta({ enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 })
+    .then(r => r.erro === 2 || r.erro === 3 ? tenta({ enableHighAccuracy: false, timeout: 12000, maximumAge: 300000 }) : r);
 }
 function waLink(p, pos, de) {
   let num = p.zap; if (num.length <= 11) num = '55' + num;
@@ -797,7 +803,7 @@ function renderThread(p, volta) {
     info.append(el('b', '', fmtQuando(av.quando)), el('span', 'meta', [av.nome && 'por ' + av.nome, av.pct && `${av.pct}% parecido`].filter(Boolean).join(' · ') || 'Reconhecido pelo app'));
     if (av.texto) info.append(el('p', '', av.texto));
     const links = el('div', 'tags');
-    if (av.local) { const a = el('a', 'linkish', 'Ver no mapa'); a.href = `https://maps.google.com/?q=${av.local.lat},${av.local.lng}`; a.target = '_blank'; a.rel = 'noopener'; links.append(a); }
+    if (av.local) { const a = el('a', 'linkish', 'Ver onde foi visto no mapa'); a.href = `https://maps.google.com/?q=${av.local.lat},${av.local.lng}`; a.target = '_blank'; a.rel = 'noopener'; links.append(a); }
     if (av.zap) { const a = el('a', 'linkish', `WhatsApp ${av.nome ? 'de ' + av.nome : ''}`.trim()); a.target = '_blank'; a.rel = 'noopener';
       a.href = `https://wa.me/55${av.zap}?text=${encodeURIComponent(`Olá${av.nome ? ', ' + av.nome : ''}! Vi o que você registrou no anúncio do(a) ${p.nome} no Reencontro.`)}`; links.append(a); }
     if (links.childNodes.length) info.append(links);
@@ -816,9 +822,19 @@ $('avPost').onclick = async () => {
   if (!$('avTexto').value.trim()) { err.hidden = false; err.textContent = 'Conte o que você viu.'; $('avTexto').focus(); return; }
   const btn = $('avPost'); btn.disabled = true;
   let local = null;
-  if ($('avLoc').checked && navigator.geolocation) {
-    const pos = await new Promise(res => navigator.geolocation.getCurrentPosition(x => res(x), () => res(null), { enableHighAccuracy: true, timeout: 8000 }));
-    if (pos) local = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) };
+  if ($('avLoc').checked) {
+    btn.textContent = 'Pegando sua localização…';
+    const { pos, erro } = await pegarLocal();
+    btn.textContent = 'Publicar no anúncio';
+    // pediu para incluir o local e não deu: avisa em vez de publicar sem
+    if (!pos) {
+      btn.disabled = false; err.hidden = false;
+      err.textContent = erro === 1 ? 'O celular não deixou o app ver sua localização. Toque no cadeado ao lado do endereço do site e permita a localização, ou desmarque "Incluir onde estou agora".'
+        : erro === 0 ? 'Este navegador não informa a localização. Desmarque "Incluir onde estou agora" para publicar.'
+        : 'Não consegui pegar sua localização (veja se a localização do celular está ligada). Tente de novo ou desmarque "Incluir onde estou agora".';
+      return;
+    }
+    local = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) };
   }
   const extra = { texto: $('avTexto').value.trim(), nome: $('avNome').value.trim(), zap, local };
   try {
