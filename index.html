@@ -304,7 +304,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DarkNet Reference (ml5.js, licença MIT), rodando no aparelho. · v8</footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v9</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -330,11 +330,13 @@ footer { font-size: .78em; color: var(--muted); }
 const $ = id => document.getElementById(id);
 
 /* ---------- Calibração (a partir de testes com fotos reais) ----------
-   Semelhança do modelo (cosseno): mesma gata ficou entre 0,49 e 0,68 no melhor par;
-   outros gatos ficaram abaixo de 0,24. A porcentagem mostrada é essa escala. */
-const toPct = cos => Math.round(Math.max(0, Math.min(1, (cos - 0.15) / 0.55)) * 100);
-const MATCH = 0.38; // abaixo disso não sugerimos avisar o tutor
-const level = cos => cos >= 0.45 ? ['hi', 'Muito parecido'] : cos >= MATCH ? ['md', 'Parecido'] : ['lo', 'Pouco parecido'];
+   DINOv2, 115 fotos de 8 animais (cadastro com 3–4 fotos, melhor par): o mesmo animal passou de 0,42 em 71% dos casos
+   e de 0,55 em 54%; outro animal da mesma espécie passou de 0,42 em 21% e de 0,55 em 8%; outra espécie quase nunca.
+   A porcentagem mostrada é uma escala: 0,42 = 60%, 0,55 = 80%. */
+const toPct = cos => Math.round(Math.max(0, Math.min(1, (cos - 0.03) / 0.65)) * 100);
+const MATCH = 0.42; // abaixo disso não sugerimos avisar o tutor
+const level = cos => cos >= 0.55 ? ['hi', 'Muito parecido'] : cos >= MATCH ? ['md', 'Parecido'] : ['lo', 'Pouco parecido'];
+const VERSAO = 2; // muda quando o modelo muda; fotos cadastradas com outra versão são analisadas de novo
 
 /* ---------- Banco local (IndexedDB) ---------- */
 let dbp = null;
@@ -371,7 +373,7 @@ function pingModel() { return new Promise((res, rej) => { const id = ++seq; jobs
 function errMsg(e) {
   const m = String((e && e.message) || e);
   if (m.startsWith('modelo_ausente')) return 'O app não encontrou os arquivos do modelo (' + m.split(':')[1] + '). Confira se a pasta "modelo" foi enviada para o GitHub.';
-  if (m === 'modelo_incompleto') return 'O arquivo do modelo chegou incompleto. Envie de novo o darknet-int8.bin para o GitHub.';
+  if (m === 'modelo_incompleto') return 'O arquivo do modelo chegou incompleto. Envie de novo o dinov2-small-q8.onnx para o GitHub.';
   if (m === 'foto') return 'Não consegui abrir essa foto. Tente outra, ou tire uma foto agora.';
   if (m === 'worker') return 'O celular interrompeu a análise (pouca memória). Feche outros apps e tente de novo.';
   return 'Não consegui analisar a foto (' + m + ').';
@@ -390,15 +392,21 @@ async function loadBitmap(blob) {
     return c;
   } catch (_) { throw new Error('foto'); } finally { URL.revokeObjectURL(url); }
 }
-/* recorte quadrado central em 256x256 + miniatura */
+/* recorte quadrado central em 224x224 (entrada do modelo) */
+function pixelsDe(bmp) {
+  const s = Math.min(bmp.width, bmp.height), sx = (bmp.width - s) / 2, sy = (bmp.height - s) / 2;
+  const c = document.createElement('canvas'); c.width = c.height = 224;
+  const g = c.getContext('2d', { willReadFrequently: true }); g.imageSmoothingQuality = 'high';
+  g.drawImage(bmp, sx, sy, s, s, 0, 0, 224, 224);
+  const d = g.getImageData(0, 0, 224, 224).data, px = new Float32Array(224 * 224 * 3);
+  for (let i = 0, j = 0; i < d.length; i += 4) { px[j++] = d[i] / 255; px[j++] = d[i + 1] / 255; px[j++] = d[i + 2] / 255; }
+  return px;
+}
+/* entrada do modelo + miniatura + foto do anúncio */
 async function prepare(blob) {
   const bmp = await loadBitmap(blob);
   const s = Math.min(bmp.width, bmp.height), sx = (bmp.width - s) / 2, sy = (bmp.height - s) / 2;
-  const c = document.createElement('canvas'); c.width = c.height = 256;
-  const g = c.getContext('2d', { willReadFrequently: true }); g.imageSmoothingQuality = 'high';
-  g.drawImage(bmp, sx, sy, s, s, 0, 0, 256, 256);
-  const d = g.getImageData(0, 0, 256, 256).data, px = new Float32Array(256 * 256 * 3);
-  for (let i = 0, j = 0; i < d.length; i += 4) { px[j++] = d[i] / 255; px[j++] = d[i + 1] / 255; px[j++] = d[i + 2] / 255; }
+  const px = pixelsDe(bmp);
   const t = document.createElement('canvas'); t.width = t.height = 320;
   t.getContext('2d').drawImage(bmp, sx, sy, s, s, 0, 0, 320, 320);
   const thumb = await new Promise(r => t.toBlob(r, 'image/jpeg', 0.85));
@@ -410,6 +418,24 @@ async function prepare(blob) {
   return { px, thumb, foto };
 }
 const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+// cadastros feitos com um modelo antigo: analisa de novo as fotos guardadas no aparelho
+let atualizando = null;
+function atualizarCadastros() {
+  return atualizando || (atualizando = (async () => {
+    for (const p of await allPets()) {
+      if (p.fotos.every(f => f.v === VERSAO)) continue;
+      for (const f of p.fotos) if (f.v !== VERSAO) {
+        try { const bmp = await loadBitmap(f.foto || f.thumb); const px = pixelsDe(bmp); if (bmp.close) bmp.close(); f.emb = Array.from(await embedPixels(px)); f.v = VERSAO; } catch (_) {}
+      }
+      // relê o cadastro para não desfazer uma edição feita enquanto isso
+      const atual = await getPet(p.id);
+      if (atual && atual.fotos.length === p.fotos.length) {
+        atual.fotos.forEach((f, i) => { if (f.v !== VERSAO && p.fotos[i].v === VERSAO) { f.emb = p.fotos[i].emb; f.v = VERSAO; } });
+        await putPet(atual);
+      }
+    }
+  })().catch(() => {}).finally(() => { atualizando = null; }));
+}
 
 /* ---------- Navegação ---------- */
 let atual = 'vHome';
@@ -502,7 +528,7 @@ function abrirCadastro(m, itens = [], pet = null) {
 }
 $('goLost').onclick = () => abrirCadastro('perdido');
 function editar(pet) {
-  abrirCadastro(tipoDe(pet), pet.fotos.map(f => ({ url: URL.createObjectURL(f.foto || f.thumb), thumb: f.thumb, foto: f.foto, emb: f.emb })), pet);
+  abrirCadastro(tipoDe(pet), pet.fotos.map(f => ({ url: URL.createObjectURL(f.foto || f.thumb), thumb: f.thumb, foto: f.foto, emb: f.emb, v: f.v })), pet);
 }
 $('arqBtn').onclick = async () => {
   const b = $('arqBtn'), reativar = !!editando.arquivado;
@@ -528,7 +554,7 @@ function renderDraft() {
 async function addDraft(blob) {
   const item = { url: URL.createObjectURL(blob), emb: null, thumb: null, foto: null };
   draft.push(item); renderDraft();
-  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); }
+  try { const { px, thumb, foto } = await prepare(blob); item.thumb = thumb; item.foto = foto; item.emb = await embedPixels(px); item.v = VERSAO; }
   catch (e) { item.failed = true; $('lostErr').hidden = false; $('lostErr').textContent = errMsg(e); }
   renderDraft();
 }
@@ -561,7 +587,7 @@ $('saveLost').onclick = async () => {
     tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), data: $('fData').value,
     descricao: $('fDesc').value.trim(), contato: $('fContato').value.trim(), zap,
     recompensa: modo === 'perdido' ? +$('fRecompensa').value.replace(/\D/g, '') || 0 : 0,
-    fotos: draft.map(f => ({ thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb) })) };
+    fotos: draft.map(f => ({ thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb), v: f.v })) };
   try { await putPet(pet); } catch (_) { return falha('Não consegui salvar neste aparelho.'); }
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null;
   openPoster(pet, 'vHome');
@@ -573,14 +599,16 @@ const avAtual = new Map(); // pet id -> avistamento criado pela foto atual
 const fotografarAchado = () => openCamera(blob => compare(blob), 'Deixe o animal dentro do quadrado');
 $('goFound').onclick = fotografarAchado; $('againBtn').onclick = fotografarAchado;
 // semelhança de um vetor com um cadastro = foto cadastrada mais parecida
-const melhor = (emb, p) => p.fotos.reduce((a, f) => { const c = dot(emb, f.emb); return c > a.cos ? { cos: c, foto: f } : a; }, { cos: -1, foto: p.fotos[0] });
+const melhor = (emb, p) => p.fotos.reduce((a, f) => { const c = f.v === VERSAO ? dot(emb, f.emb) : -1; return c > a.cos ? { cos: c, foto: f } : a; }, { cos: -1, foto: p.fotos[0] });
+const comparavel = p => p.fotos.some(f => f.v === VERSAO);
 async function compare(blob) {
   show('vResult');
   if (foundUrl) URL.revokeObjectURL(foundUrl); foundUrl = URL.createObjectURL(blob);
   $('foundImg').src = foundUrl; $('foundTitle').textContent = 'Comparando…'; $('foundSub').textContent = 'A comparação acontece no seu celular.';
   $('foundProg').hidden = false; $('matches').textContent = ''; $('shareBox').hidden = true; $('regBox').hidden = true; achado = null;
   let pets = [];
-  try { pets = (await allPets()).filter(p => tipoDe(p) === 'perdido' && !p.arquivado); } catch (_) {}
+  await atualizarCadastros();
+  try { pets = (await allPets()).filter(p => tipoDe(p) === 'perdido' && !p.arquivado && comparavel(p)); } catch (_) {}
   let prep, emb;
   try { prep = await prepare(blob); emb = await embedPixels(prep.px); }
   catch (e) { $('foundProg').hidden = true; $('foundTitle').textContent = 'Não consegui analisar a foto'; $('foundSub').textContent = errMsg(e); return; }
@@ -605,7 +633,7 @@ async function compare(blob) {
   $('shareBox').hidden = !achou;
 }
 $('regFound').onclick = () => {
-  if (achado) abrirCadastro('encontrado', [{ url: URL.createObjectURL(achado.foto), thumb: achado.thumb, foto: achado.foto, emb: achado.emb }]);
+  if (achado) abrirCadastro('encontrado', [{ url: URL.createObjectURL(achado.foto), thumb: achado.thumb, foto: achado.foto, emb: achado.emb, v: VERSAO }]);
 };
 /* cartão de resultado: foto mais parecida, %, recompensa, descrição, anúncio e WhatsApp.
    `de` = cadastro do outro lado (quando a comparação parte de um cadastro e não de uma foto nova) */
@@ -806,9 +834,10 @@ $('avPost').onclick = async () => {
 };
 // cruza desaparecidos com encontrados: mostra cadastros do outro tipo parecidos com este
 async function mostrarParecidos(p) {
-  let outros = [];
-  try { outros = (await allPets()).filter(o => tipoDe(o) !== tipoDe(p) && !o.arquivado); } catch (_) {}
-  const r = outros.map(o => p.fotos.reduce((a, f) => { const m = melhor(f.emb, o); return m.cos > a.cos ? { p: o, ...m } : a; }, { p: o, cos: -1, foto: o.fotos[0] }))
+  let outros = [], eu = p;
+  await atualizarCadastros();
+  try { eu = (await getPet(p.id)) || p; outros = (await allPets()).filter(o => tipoDe(o) !== tipoDe(p) && !o.arquivado); } catch (_) {}
+  const r = outros.map(o => eu.fotos.reduce((a, f) => { const m = f.v === VERSAO ? melhor(f.emb, o) : a; return m.cos > a.cos ? { p: o, ...m } : a; }, { p: o, cos: -1, foto: o.fotos[0] }))
     .filter(x => x.cos >= MATCH).sort((a, b) => b.cos - a.cos).slice(0, 3);
   if (!r.length) return;
   $('posterMatchTitle').textContent = tipoDe(p) === 'encontrado' ? 'Pets desaparecidos parecidos com este animal' : 'Atenção: animais encontrados parecidos com o seu pet';
@@ -874,7 +903,7 @@ $('shutter').onclick = async () => {
 };
 
 renderPets();
-pingModel().catch(e => {
+pingModel().then(atualizarCadastros, e => {
   const b = document.createElement('p'); b.className = 'panel'; b.style.color = 'var(--accent)'; b.style.fontWeight = '700';
   b.textContent = errMsg(e); $('vHome').prepend(b);
 });

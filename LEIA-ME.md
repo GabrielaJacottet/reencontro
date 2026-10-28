@@ -18,8 +18,8 @@ Achou um animal na rua? Tire uma foto e o app mostra os pets desaparecidos mais 
 
 ## Como funciona
 
-- `modelo/`: rede neural DarkNet Reference (projeto ml5.js, licença MIT), com os pesos compactados em 8 bits (6 MB). Ela gera uma "impressão visual" de cada foto.
-- `modelo-worker.js`: roda a rede em segundo plano, no celular.
+- `modelo/`: rede neural DINOv2 small (Meta, licença Apache 2.0), com os pesos compactados em 8 bits (24 MB), e o ONNX Runtime Web (Microsoft, licença MIT), que roda a rede no navegador. Ela gera uma "impressão visual" de cada foto.
+- `modelo-worker.js`: roda a rede em segundo plano, no celular. Na primeira vez o app baixa cerca de 35 MB; depois fica guardado no aparelho.
 - `index.html`: telas, câmera e comparação. Cada pet vale pela foto cadastrada mais parecida com a foto nova.
 - A porcentagem é uma escala calibrada com testes em fotos reais. A partir de "Parecido" o app sugere avisar o tutor pelo WhatsApp.
 - `sw.js`: deixa o app funcionando mesmo sem internet depois da primeira vez.
