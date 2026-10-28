@@ -187,7 +187,7 @@ footer { font-size: .78em; color: var(--muted); }
       <h2 id="petsTitle">Animais cadastrados</h2>
       <input class="search" id="busca" type="search" autocomplete="off" placeholder="Buscar por nome, bairro, cor, coleira…" aria-label="Buscar animais">
       <div class="chips" id="filtroTipo" role="group" aria-label="Situação">
-        <button type="button" data-v="" aria-pressed="true">Todos</button>
+        <button type="button" data-v="" aria-pressed="true">Em aberto</button>
         <button type="button" data-v="perdido" aria-pressed="false">Desaparecidos</button>
         <button type="button" data-v="encontrado" aria-pressed="false">Encontrados na rua</button>
         <button type="button" data-v="reencontrado" aria-pressed="false">Reencontrados</button>
@@ -203,7 +203,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
     <p class="note">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
-      <span>As fotos são comparadas no próprio celular e não são enviadas para a internet. Neste protótipo, os cadastros ficam salvos só neste aparelho.</span>
+      <span>Os anúncios (fotos, bairro, nome e WhatsApp para contato) ficam visíveis para quem usa o app. A comparação das fotos acontece no seu celular; quando a foto de um animal encontrado parece com um pet cadastrado, ela vai para o tutor junto com o que você registrar. Só este aparelho pode editar ou apagar os anúncios que você criou.</span>
     </p>
   </section>
 
@@ -244,6 +244,7 @@ footer { font-size: .78em; color: var(--muted); }
     <button class="btn" type="button" id="saveLost">Salvar cadastro</button>
     <button class="btn secondary" type="button" id="reencBtn" hidden>Meu pet foi encontrado!</button>
     <button class="btn secondary" type="button" id="arqBtn" hidden>Arquivar</button>
+    <button class="btn secondary" type="button" id="delBtn" hidden>Apagar anúncio</button>
   </section>
 
   <!-- ============ COMPARANDO / RESULTADO ============ -->
@@ -287,6 +288,7 @@ footer { font-size: .78em; color: var(--muted); }
       <a class="btn secondary" id="posterDown" href="#" download="anuncio.jpg">Baixar imagem</a>
     </div>
     <button class="btn small secondary" type="button" id="posterCopy">Copiar texto do anúncio</button>
+    <button class="btn small secondary" type="button" id="denBtn" hidden>Denunciar anúncio</button>
     <div class="panel" id="threadBox" hidden>
       <h2 id="threadTitle">Avistamentos</h2>
       <div class="pets" id="threadList"></div>
@@ -306,7 +308,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v13</footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v14</footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -326,6 +328,7 @@ footer { font-size: .78em; color: var(--muted); }
   <div class="flash" id="flash"></div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 (() => {
 'use strict';
@@ -343,26 +346,77 @@ const naoAnimal = r => r.animal != null && r.animal < ANIMAL_MIN;
 const level = cos => cos >= 0.55 ? ['hi', 'Muito parecido'] : cos >= MATCH ? ['md', 'Parecido'] : ['lo', 'Pouco parecido'];
 const VERSAO = 2; // muda quando o modelo muda; fotos cadastradas com outra versão são analisadas de novo
 
-/* ---------- Banco local (IndexedDB) ---------- */
-let dbp = null;
-function db() {
-  if (!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('reencontro', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('pets', { keyPath: 'id' });
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-  });
-  return dbp;
+/* ---------- Banco online (Supabase; regras de acesso em supabase/esquema.sql) ---------- */
+const sb = supabase.createClient('https://fcxambvdgzteutokpgqs.supabase.co', 'sb_publishable_nxpqq2s8lBZ5rr3xAG-J-Q_7vxWeYuB');
+// login anônimo: só acontece no primeiro cadastro ou avistamento; quem só olha não cria usuário
+let euId = null;
+const sessao = sb.auth.getSession().then(({ data }) => { euId = data.session ? data.session.user.id : null; }).catch(() => {});
+async function entrar() {
+  await sessao; if (euId) return euId;
+  const { data, error } = await sb.auth.signInAnonymously(); if (error) throw error;
+  return (euId = data.user.id);
 }
-async function tx(mode, fn) {
-  const d = await db();
-  return new Promise((res, rej) => {
-    const t = d.transaction('pets', mode), s = t.objectStore('pets');
-    const out = fn(s); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error);
-  });
+const meu = p => !!euId && p.dono === euId;
+const ms = t => t ? Date.parse(t) : 0, iso = n => n ? new Date(n).toISOString() : null;
+const urlFoto = c => sb.storage.from('fotos').getPublicUrl(c).data.publicUrl;
+const caminhoDe = url => decodeURIComponent(url.split('/object/public/fotos/')[1]);
+const CAMPOS = '*, fotos(id, ordem, foto, thumb, emb, v), avistamentos(*)';
+const deAv = a => ({ id: a.id, autor: a.autor, quando: ms(a.quando), thumb: a.thumb ? urlFoto(a.thumb) : null, pct: a.pct, texto: a.texto || '', nome: a.nome || '', zap: a.zap || '',
+  local: a.lat != null ? { lat: a.lat, lng: a.lng } : null });
+// linha do banco -> cadastro no formato do app (fotos viram links; vetores, listas de números)
+const dePet = r => ({ id: r.id, dono: r.dono, tipo: r.tipo, nome: r.nome || '', especie: r.especie, bairro: r.bairro || '', data: r.data || '', descricao: r.descricao || '',
+  contato: r.contato || '', zap: r.zap || '', recompensa: r.recompensa || 0, reencontrado: ms(r.reencontrado), arquivado: ms(r.arquivado), criado: ms(r.criado),
+  fotos: (r.fotos || []).sort((a, b) => a.ordem - b.ordem).map(f => ({ id: f.id, foto: urlFoto(f.foto), thumb: urlFoto(f.thumb), emb: f.emb ? JSON.parse(f.emb) : [], v: f.v })),
+  avistamentos: (r.avistamentos || []).map(deAv).sort((a, b) => b.quando - a.quando) });
+async function allPets() {
+  await sessao;
+  const { data, error } = await sb.from('pets').select(CAMPOS); if (error) throw error;
+  return data.map(dePet).filter(p => p.fotos.length); // anúncio sem foto = gravação interrompida
 }
-const allPets = () => tx('readonly', s => s.getAll());
-const putPet = p => tx('readwrite', s => s.put(p));
-const getPet = id => tx('readonly', s => s.get(id));
+async function getPet(id) {
+  await sessao;
+  const { data, error } = await sb.from('pets').select(CAMPOS).eq('id', id).maybeSingle(); if (error) throw error;
+  return data && dePet(data);
+}
+// sobe uma imagem para a pasta deste usuário e devolve o caminho no Storage
+async function subir(blob, nome) {
+  const caminho = `${await entrar()}/${nome}.jpg`;
+  const { error } = await sb.storage.from('fotos').upload(caminho, blob, { contentType: 'image/jpeg' }); if (error) throw error;
+  return caminho;
+}
+// grava anúncio e fotos (só o dono): foto nova é Blob; a já enviada tem id e link
+async function putPet(p) {
+  await entrar();
+  const campos = { tipo: tipoDe(p), nome: p.nome || null, especie: p.especie, bairro: p.bairro || null, data: p.data || null, descricao: p.descricao || null,
+    contato: p.contato || null, zap: p.zap || null, recompensa: p.recompensa || 0, reencontrado: iso(p.reencontrado), arquivado: iso(p.arquivado) };
+  const up = await sb.from('pets').update(campos).eq('id', p.id).select('id'); if (up.error) throw up.error;
+  if (!up.data.length) { const { error } = await sb.from('pets').insert({ id: p.id, ...campos }); if (error) throw error; }
+  const { data: antes, error: e1 } = await sb.from('fotos').select('id, foto, thumb').eq('pet', p.id); if (e1) throw e1;
+  const ficam = new Set(p.fotos.map(f => f.id)), saem = antes.filter(f => !ficam.has(f.id));
+  if (saem.length) {
+    const { error } = await sb.from('fotos').delete().in('id', saem.map(f => f.id)); if (error) throw error;
+    await sb.storage.from('fotos').remove(saem.flatMap(f => [f.foto, f.thumb]));
+  }
+  for (const [ordem, f] of p.fotos.entries()) {
+    const emb = JSON.stringify(Array.from(f.emb));
+    if (f.id) { const { error } = await sb.from('fotos').update({ ordem, emb, v: f.v }).eq('id', f.id); if (error) throw error; continue; }
+    const base = `${p.id}/${crypto.randomUUID()}`;
+    const [foto, thumb] = await Promise.all([subir(f.foto, base + '-f'), subir(f.thumb, base + '-t')]);
+    const { error } = await sb.from('fotos').insert({ pet: p.id, ordem, foto, thumb, emb, v: f.v }); if (error) throw error;
+  }
+}
+async function apagarPet(p) {
+  const { data: fs } = await sb.from('fotos').select('foto, thumb').eq('pet', p.id);
+  const { error } = await sb.from('pets').delete().eq('id', p.id); if (error) throw error;
+  if (fs && fs.length) await sb.storage.from('fotos').remove(fs.flatMap(f => [f.foto, f.thumb]));
+}
+function msgNuvem(e) {
+  const m = String((e && e.message) || e);
+  if (m.includes('limite_anuncios')) return 'Cada pessoa pode ter até 5 anúncios ativos. Arquive ou apague um que não precisa mais.';
+  if (m.includes('limite_fotos')) return 'Cada anúncio pode ter até 6 fotos.';
+  if (m.includes('limite_avistamentos')) return 'Você chegou ao limite de registros por hoje. Tente de novo amanhã.';
+  return 'Não consegui salvar. Confira a internet e tente de novo.';
+}
 
 /* ---------- Modelo (em segundo plano) ---------- */
 let worker = null, seq = 0; const jobs = new Map();
@@ -385,7 +439,9 @@ function errMsg(e) {
   return 'Não consegui analisar a foto (' + m + ').';
 }
 function embedPixels(px) { return new Promise((res, rej) => { const id = ++seq; jobs.set(id, { res, rej }); getWorker().postMessage({ id, pixels: px.buffer }, [px.buffer]); }); }
+const paraBlob = async x => typeof x === 'string' ? (await fetch(x)).blob() : x;
 async function loadBitmap(blob) {
+  blob = await paraBlob(blob);
   try { return await createImageBitmap(blob, { imageOrientation: 'from-image' }); } catch (_) {}
   try { return await createImageBitmap(blob); } catch (_) {}
   // último recurso: deixa o próprio navegador abrir a imagem
@@ -428,7 +484,7 @@ const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] 
 let atualizando = null;
 function atualizarCadastros() {
   return atualizando || (atualizando = (async () => {
-    for (const p of await allPets()) {
+    for (const p of (await allPets()).filter(meu)) {
       if (p.fotos.every(f => f.v === VERSAO)) continue;
       for (const f of p.fotos) if (f.v !== VERSAO) {
         try { const bmp = await loadBitmap(f.foto || f.thumb); const px = pixelsDe(bmp); if (bmp.close) bmp.close(); f.emb = Array.from((await embedPixels(px)).emb); f.v = VERSAO; } catch (_) {}
@@ -451,7 +507,7 @@ document.querySelectorAll('[data-home]').forEach(b => b.onclick = goHome);
 
 /* ---------- Textos e formatos ---------- */
 const urls = [];
-function blobUrl(b) { const u = URL.createObjectURL(b); urls.push(u); return u; }
+function blobUrl(b) { if (typeof b === 'string') return b; const u = URL.createObjectURL(b); urls.push(u); return u; }
 const tipoDe = p => p.tipo || 'perdido'; // cadastros antigos não têm tipo
 const nomeDe = p => p.nome || (tipoDe(p) === 'encontrado' ? 'Animal encontrado' : 'Sem nome');
 function since(d, tipo) {
@@ -479,7 +535,7 @@ async function renderPets() {
   while (urls.length) URL.revokeObjectURL(urls.pop());
   const list = $('petList'); list.textContent = '';
   let pets = [];
-  try { pets = await allPets(); } catch (_) {}
+  try { pets = await allPets(); } catch (_) { list.append(el('p', 'empty', 'Não consegui carregar os cadastros. Confira a internet.')); return; }
   $('petsTitle').textContent = pets.length ? `Animais cadastrados (${pets.length})` : 'Animais cadastrados';
   if (!pets.length) { list.append(el('p', 'empty', 'Nenhum animal cadastrado ainda. Para testar, cadastre um pet em "Perdi meu pet" e depois use "Encontrei um animal".')); return; }
   const tipo = chipVal('filtroTipo'), esp = chipVal('filtroEspecie'), q = semAcento($('busca').value.trim());
@@ -499,7 +555,7 @@ async function renderPets() {
     ad.setAttribute('aria-label', `Ver anúncio de ${nomeDe(pet)}`); ad.onclick = () => openPoster(pet);
     const ed = el('button', 'del', 'Editar'); ed.type = 'button';
     ed.setAttribute('aria-label', `Editar ${nomeDe(pet)}`); ed.onclick = () => editar(pet);
-    const acts = el('div', 'acts'); acts.append(ad, ed);
+    const acts = el('div', 'acts'); acts.append(ad); if (meu(pet)) acts.append(ed);
     row.append(img, info, acts); list.append(row);
   }
 }
@@ -532,17 +588,24 @@ function abrirCadastro(m, itens = [], pet = null) {
   arq.textContent = pet && pet.arquivado ? 'Reativar cadastro' : m === 'perdido' ? 'Arquivar (parei de procurar)' : 'Arquivar (o animal não está mais comigo)';
   // só aparece em "Editar", que só existe no aparelho de quem fez o anúncio
   const re = $('reencBtn'); re.hidden = !pet; delete re.dataset.armed; re.textContent = textoReenc(pet, m);
+  const del = $('delBtn'); del.hidden = !pet; delete del.dataset.armed; del.textContent = 'Apagar anúncio';
   $('lostErr').hidden = true; show('vLost');
 }
 $('goLost').onclick = () => abrirCadastro('perdido');
 function editar(pet) {
-  abrirCadastro(tipoDe(pet), pet.fotos.map(f => ({ url: URL.createObjectURL(f.foto || f.thumb), thumb: f.thumb, foto: f.foto, emb: f.emb, v: f.v })), pet);
+  abrirCadastro(tipoDe(pet), pet.fotos.map(f => ({ id: f.id, url: blobUrl(f.thumb), thumb: f.thumb, foto: f.foto, emb: f.emb, v: f.v })), pet);
 }
 $('arqBtn').onclick = async () => {
   const b = $('arqBtn'), reativar = !!editando.arquivado;
   if (!reativar && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Toque de novo para arquivar'; return; }
   const pet = { ...editando, arquivado: reativar ? 0 : Date.now() };
-  try { await putPet(pet); } catch (_) { $('lostErr').hidden = false; $('lostErr').textContent = 'Não consegui salvar neste aparelho.'; return; }
+  try { await putPet(pet); } catch (e) { $('lostErr').hidden = false; $('lostErr').textContent = msgNuvem(e); return; }
+  draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null; goHome();
+};
+$('delBtn').onclick = async () => {
+  const b = $('delBtn');
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Toque de novo para apagar de vez'; return; }
+  try { await apagarPet(editando); } catch (e) { $('lostErr').hidden = false; $('lostErr').textContent = msgNuvem(e); return; }
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null; goHome();
 };
 // pet de volta para casa: o anúncio vira "Reencontrado" e o cadastro sai das comparações
@@ -551,7 +614,7 @@ $('reencBtn').onclick = async () => {
   const b = $('reencBtn'), desfazer = !!editando.reencontrado;
   if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = desfazer ? 'Toque de novo para desfazer' : 'Toque de novo para confirmar'; return; }
   const pet = { ...editando, reencontrado: desfazer ? 0 : Date.now() };
-  try { await putPet(pet); } catch (_) { $('lostErr').hidden = false; $('lostErr').textContent = 'Não consegui salvar neste aparelho.'; return; }
+  try { await putPet(pet); } catch (e) { $('lostErr').hidden = false; $('lostErr').textContent = msgNuvem(e); return; }
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null;
   if (desfazer) goHome(); else openPoster(pet, 'vHome');
 };
@@ -604,12 +667,14 @@ $('saveLost').onclick = async () => {
   $('fZap').value = maskZap($('fZap').value);
   const zap = $('fZap').value.replace(/\D/g, '');
   if (!zapValido(zap)) return falha(zap ? `O WhatsApp ${$('fZap').value} parece incompleto. Use DDD + número, por exemplo (21) 99999-9999.` : 'Digite um WhatsApp com DDD para contato, por exemplo (21) 99999-9999.', 'fZap');
-  const pet = { avistamentos: [], ...editando, id: editando ? editando.id : 'p' + Date.now(), criado: editando ? editando.criado : Date.now(),
+  const pet = { avistamentos: [], ...editando, id: editando ? editando.id : crypto.randomUUID(), criado: editando ? editando.criado : Date.now(),
     tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), data: $('fData').value,
     descricao: $('fDesc').value.trim(), contato: $('fContato').value.trim(), zap,
     recompensa: modo === 'perdido' ? +$('fRecompensa').value.replace(/\D/g, '') || 0 : 0,
-    fotos: draft.map(f => ({ thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb), v: f.v })) };
-  try { await putPet(pet); } catch (_) { return falha('Não consegui salvar neste aparelho.'); }
+    fotos: draft.map(f => ({ id: f.id, thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb), v: f.v })) };
+  const sv = $('saveLost'), txt = sv.textContent; sv.disabled = true; sv.textContent = 'Salvando…';
+  try { await putPet(pet); } catch (e) { return falha(msgNuvem(e)); } finally { sv.disabled = false; sv.textContent = txt; }
+  pet.dono = euId;
   draft.forEach(f => URL.revokeObjectURL(f.url)); draft = []; editando = null;
   openPoster(pet, 'vHome');
 };
@@ -645,12 +710,13 @@ async function compare(blob) {
   $('foundTitle').textContent = achou ? `Pode ser ${nomeDe(ranked[0].p)}!` : 'Nenhum pet muito parecido';
   $('foundSub').textContent = achou ? 'Confira o anúncio e as fotos antes de avisar o tutor.' : `Comparado com ${pets.length} pet${pets.length > 1 ? 's' : ''} desaparecido${pets.length > 1 ? 's' : ''}.`;
   // guarda o reconhecimento no anúncio do pet (thread de avistamentos); quem encontrou pode completar depois
-  const quando = Date.now(); avAtual.clear();
+  avAtual.clear(); let thumbAv = null;
   for (const r of ranked) if (r.cos >= MATCH) {
-    const av = { id: 'a' + quando, quando, thumb: prep.thumb, pct: toPct(r.cos) };
-    r.p.avistamentos = [av, ...(r.p.avistamentos || [])].slice(0, 20);
-    avAtual.set(r.p.id, av.id);
-    try { await putPet(r.p); } catch (_) {}
+    try {
+      thumbAv = thumbAv || await subir(prep.thumb, 'av/' + crypto.randomUUID());
+      const { data, error } = await sb.from('avistamentos').insert({ pet: r.p.id, thumb: thumbAv, pct: toPct(r.cos) }).select().single(); if (error) throw error;
+      r.p.avistamentos = [deAv(data), ...r.p.avistamentos]; avAtual.set(r.p.id, data.id);
+    } catch (_) {}
   }
   ranked.slice(0, 3).forEach((r, i) => $('matches').append(matchCard(r, { best: i === 0 && achou, volta: 'vResult', local: true })));
   $('shareBox').hidden = !achou;
@@ -790,15 +856,28 @@ async function drawPoster(p) {
   for (const [t, w, s, cor, h] of blocos) { g.fillStyle = cor; fit(t, w, s, 960); g.fillText(t, W / 2, ty + h - s * 0.6); ty += h; }
   // fotos: 1 grande, 2 lado a lado ou 1 grande + 2 pequenas
   const top = 190, ph = y - alto - 24 - top;
-  const imgs = await Promise.all(p.fotos.slice(0, 3).map(f => createImageBitmap(f.foto || f.thumb)));
+  const imgs = await Promise.all(p.fotos.slice(0, 3).map(async f => createImageBitmap(await paraBlob(f.foto || f.thumb))));
   const sw = 300, boxes = imgs.length >= 3 ? [[60, top, 940 - sw, ph], [1020 - sw, top, sw, (ph - 20) / 2], [1020 - sw, top + (ph + 20) / 2, sw, (ph - 20) / 2]]
     : imgs.length === 2 ? [[60, top, 470, ph], [550, top, 470, ph]] : [[60, top, 960, ph]];
   imgs.forEach((img, i) => cover(img, ...boxes[i]));
   imgs.forEach(b => b.close && b.close());
   return new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
 }
+// denúncia: 3 pessoas diferentes ocultam o anúncio até a revisão
+let denPet = null;
+$('denBtn').onclick = async () => {
+  const b = $('denBtn');
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Toque de novo para denunciar (foto ou texto impróprio, golpe)'; return; }
+  b.disabled = true;
+  try {
+    await entrar();
+    const { error } = await sb.from('denuncias').insert({ pet: denPet.id }); if (error && error.code !== '23505') throw error; // 23505 = já denunciou
+    b.textContent = 'Denúncia enviada. Obrigado!';
+  } catch (_) { b.disabled = false; delete b.dataset.armed; b.textContent = 'Não consegui enviar. Toque para tentar de novo'; }
+};
 async function openPoster(p, volta = 'vHome', registrar = false) {
   renderThread(p, volta);
+  const den = $('denBtn'); den.hidden = meu(p); den.disabled = false; delete den.dataset.armed; den.textContent = 'Denunciar anúncio'; denPet = p;
   posterVolta = volta; show('vPoster'); $('posterMatchBox').hidden = true;
   $('posterTitle').textContent = `Anúncio de ${nomeDe(p)}`;
   $('posterNote').textContent = p.reencontrado ? 'Compartilhe a boa notícia nos mesmos grupos onde o anúncio circulou, para ninguém continuar procurando.'
@@ -827,7 +906,7 @@ function renderThread(p, volta) {
   const box = $('threadBox'), list = $('threadList'), avs = p.avistamentos || [];
   box.hidden = tipoDe(p) !== 'perdido'; list.textContent = '';
   $('threadTitle').textContent = avs.length ? `Avistamentos (${avs.length})` : 'Avistamentos';
-  if (!avs.length) list.append(el('p', 'empty', 'Ninguém registrou avistamentos ainda.'));
+  if (!avs.length) list.append(el('p', 'empty', meu(p) ? 'Ninguém registrou avistamentos ainda.' : 'Os avistamentos registrados aqui aparecem só para o tutor.'));
   for (const av of avs) {
     const row = el('div', 'pet'), img = el('img'); img.alt = 'Foto do avistamento'; img.src = blobUrl(av.thumb);
     const info = el('div', 'info');
@@ -867,17 +946,16 @@ $('avPost').onclick = async () => {
     }
     local = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5) };
   }
-  const extra = { texto: $('avTexto').value.trim(), nome: $('avNome').value.trim(), zap, local };
+  const extra = { texto: $('avTexto').value.trim(), nome: $('avNome').value.trim() || null, zap: zap || null, lat: local && local.lat, lng: local && local.lng };
   try {
-    const atual = (await getPet(p.id)) || p, avId = avAtual.get(p.id);
-    const avs = atual.avistamentos || [], i = avs.findIndex(a => a.id === avId);
-    if (i >= 0) avs[i] = { ...avs[i], ...extra };
-    else avs.unshift({ id: 'a' + Date.now(), quando: Date.now(), thumb: achado ? achado.thumb : atual.fotos[0].thumb, ...extra });
-    atual.avistamentos = avs; await putPet(atual);
+    await entrar();
+    const avId = avAtual.get(p.id);
+    const { error } = avId ? await sb.from('avistamentos').update(extra).eq('id', avId) : await sb.from('avistamentos').insert({ pet: p.id, ...extra });
+    if (error) throw error;
     avAtual.delete(p.id);
     btn.disabled = false;
-    openPoster(atual, posterVolta);
-  } catch (_) { btn.disabled = false; err.hidden = false; err.textContent = 'Não consegui salvar neste aparelho.'; }
+    openPoster((await getPet(p.id)) || p, posterVolta);
+  } catch (e) { btn.disabled = false; err.hidden = false; err.textContent = msgNuvem(e); }
 };
 // cruza desaparecidos com encontrados: mostra cadastros do outro tipo parecidos com este
 async function mostrarParecidos(p) {
