@@ -1,5 +1,5 @@
 /* Guarda o app no aparelho. Com internet, a página e os scripts vêm sempre na versão mais nova. */
-const CACHE = 'reencontro-v14'; // mude a cada publicação para os celulares trocarem o cache
+const CACHE = 'reencontro-v15'; // mude a cada publicação para os celulares trocarem o cache
 const FILES = ['./', 'index.html', 'modelo-worker.js'];
 // cache: 'reload' / 'no-cache' ignoram o cache HTTP do GitHub Pages (até 10 min)
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())); });

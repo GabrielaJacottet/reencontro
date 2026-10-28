@@ -201,6 +201,21 @@ footer { font-size: .78em; color: var(--muted); }
       </div>
       <div class="pets" id="petList"></div>
     </div>
+    <div class="panel" id="feedback">
+      <h2>Feedback do teste</h2>
+      <p class="note">Achou um erro, tem uma ideia ou quer elogiar? Conte aqui. Não escreva nome completo, e-mail, telefone ou endereço.</p>
+      <div class="chips" id="fbTipo" role="group" aria-label="Sobre o quê?">
+        <button type="button" data-v="Sugestão" aria-pressed="true">Sugestão</button>
+        <button type="button" data-v="Encontrei um erro" aria-pressed="false">Encontrei um erro</button>
+        <button type="button" data-v="Elogio" aria-pressed="false">Elogio</button>
+        <button type="button" data-v="Outro assunto" aria-pressed="false">Outro assunto</button>
+      </div>
+      <label class="field">Apelido (opcional)<input id="fbNick" type="text" maxlength="16" autocomplete="off" placeholder="Como quer ser chamado"></label>
+      <label class="field">Mensagem<textarea id="fbMsg" maxlength="1000" rows="4" placeholder="Escreva aqui…"></textarea></label>
+      <input type="checkbox" id="fbBot" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px">
+      <button class="btn secondary" type="button" id="fbBtn">Enviar feedback</button>
+      <p class="note" id="fbNote" role="status" hidden></p>
+    </div>
     <p class="note">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
       <span>Os anúncios (fotos, bairro, nome e WhatsApp para contato) ficam visíveis para quem usa o app. A comparação das fotos acontece no seu celular; quando a foto de um animal encontrado parece com um pet cadastrado, ela vai para o tutor junto com o que você registrar. Só este aparelho pode editar ou apagar os anúncios que você criou.</span>
@@ -308,7 +323,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · v14</footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · <span id="versao">v15</span></footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -1025,6 +1040,27 @@ $('shutter').onclick = async () => {
   const f = $('flash'); f.classList.add('on'); setTimeout(() => f.classList.remove('on'), 60);
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
   closeCamera(); onShot && onShot(blob);
+};
+
+/* ---------- Feedback do teste: e-mail via Web3Forms (o destino fica na conta do Web3Forms; mesma chave do Xeque na Esteira) ---------- */
+const FEEDBACK_KEY = '6ef360c4-5b73-44ed-b23c-6f6007625fd0';
+chips('fbTipo');
+$('fbBtn').onclick = async () => {
+  const btn = $('fbBtn'), say = txt => { $('fbNote').hidden = false; $('fbNote').textContent = txt; };
+  const mensagem = $('fbMsg').value.trim(), tipo = chipVal('fbTipo'), apelido = $('fbNick').value.trim();
+  if (mensagem.length < 5) return say('Escreva um pouco mais, por favor.');
+  btn.disabled = true; say('Enviando…');
+  // FormData (e não JSON) para o navegador não fazer a pré-consulta CORS, que o Web3Forms recusa
+  const fd = new FormData();
+  Object.entries({ access_key: FEEDBACK_KEY, subject: 'Reencontro: ' + tipo, from_name: apelido || 'Testador sem apelido', tipo, mensagem,
+    apelido: apelido || '(não informado)', pagina: location.href + ' · ' + $('versao').textContent, navegador: navigator.userAgent }).forEach(([k, v]) => fd.append(k, v));
+  if ($('fbBot').checked) fd.append('botcheck', 'on');
+  try {
+    const r = await fetch('https://api.web3forms.com/submit', { method: 'POST', headers: { Accept: 'application/json' }, body: fd });
+    const j = await r.json().catch(() => ({})); if (!r.ok || !j.success) throw new Error(j.message || 'http ' + r.status);
+    $('fbMsg').value = ''; say('Feedback enviado. Obrigado!');
+    setTimeout(() => { btn.disabled = false; }, 8000);
+  } catch (_) { say('Não foi possível enviar agora. Tente de novo em instantes.'); btn.disabled = false; }
 };
 
 renderPets();
