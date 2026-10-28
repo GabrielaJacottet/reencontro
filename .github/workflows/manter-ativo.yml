@@ -1,0 +1,13 @@
+# Faz uma consulta ao Supabase a cada 3 dias para o plano gratuito não pausar o projeto (pausa após 7 dias sem uso).
+name: Manter o Supabase ativo
+on:
+  schedule:
+    - cron: '0 12 */3 * *'
+  workflow_dispatch:
+jobs:
+  consulta:
+    runs-on: ubuntu-latest
+    steps:
+      - run: >
+          curl -fsS "https://fcxambvdgzteutokpgqs.supabase.co/rest/v1/pets?select=id&limit=1"
+          -H "apikey: sb_publishable_nxpqq2s8lBZ5rr3xAG-J-Q_7vxWeYuB"
