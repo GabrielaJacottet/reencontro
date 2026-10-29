@@ -323,7 +323,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · <span id="versao">v15</span></footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · <span id="versao">v16</span></footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -375,12 +375,12 @@ const meu = p => !!euId && p.dono === euId;
 const ms = t => t ? Date.parse(t) : 0, iso = n => n ? new Date(n).toISOString() : null;
 const urlFoto = c => sb.storage.from('fotos').getPublicUrl(c).data.publicUrl;
 const caminhoDe = url => decodeURIComponent(url.split('/object/public/fotos/')[1]);
-const CAMPOS = '*, fotos(id, ordem, foto, thumb, emb, v), avistamentos(*)';
+const CAMPOS = 'id, dono, tipo, nome, especie, bairro, data, descricao, contato, recompensa, reencontrado, arquivado, oculto, criado, fotos(id, ordem, foto, thumb, emb, v), avistamentos(*)';
 const deAv = a => ({ id: a.id, autor: a.autor, quando: ms(a.quando), thumb: a.thumb ? urlFoto(a.thumb) : null, pct: a.pct, texto: a.texto || '', nome: a.nome || '', zap: a.zap || '',
   local: a.lat != null ? { lat: a.lat, lng: a.lng } : null });
 // linha do banco -> cadastro no formato do app (fotos viram links; vetores, listas de números)
 const dePet = r => ({ id: r.id, dono: r.dono, tipo: r.tipo, nome: r.nome || '', especie: r.especie, bairro: r.bairro || '', data: r.data || '', descricao: r.descricao || '',
-  contato: r.contato || '', zap: r.zap || '', recompensa: r.recompensa || 0, reencontrado: ms(r.reencontrado), arquivado: ms(r.arquivado), criado: ms(r.criado),
+  contato: r.contato || '', recompensa: r.recompensa || 0, reencontrado: ms(r.reencontrado), arquivado: ms(r.arquivado), criado: ms(r.criado),
   fotos: (r.fotos || []).sort((a, b) => a.ordem - b.ordem).map(f => ({ id: f.id, foto: urlFoto(f.foto), thumb: urlFoto(f.thumb), emb: f.emb ? JSON.parse(f.emb) : [], v: f.v })),
   avistamentos: (r.avistamentos || []).map(deAv).sort((a, b) => b.quando - a.quando) });
 async function allPets() {
@@ -403,7 +403,8 @@ async function subir(blob, nome) {
 async function putPet(p) {
   await entrar();
   const campos = { tipo: tipoDe(p), nome: p.nome || null, especie: p.especie, bairro: p.bairro || null, data: p.data || null, descricao: p.descricao || null,
-    contato: p.contato || null, zap: p.zap || null, recompensa: p.recompensa || 0, reencontrado: iso(p.reencontrado), arquivado: iso(p.arquivado) };
+    contato: p.contato || null, recompensa: p.recompensa || 0, reencontrado: iso(p.reencontrado), arquivado: iso(p.arquivado) };
+  if (p.zap !== undefined) campos.zap = p.zap || null; // não carregado = não mexe no número
   const up = await sb.from('pets').update(campos).eq('id', p.id).select('id'); if (up.error) throw up.error;
   if (!up.data.length) { const { error } = await sb.from('pets').insert({ id: p.id, ...campos }); if (error) throw error; }
   const { data: antes, error: e1 } = await sb.from('fotos').select('id, foto, thumb').eq('pet', p.id); if (e1) throw e1;
@@ -420,6 +421,15 @@ async function putPet(p) {
     const { error } = await sb.from('fotos').insert({ pet: p.id, ordem, foto, thumb, emb, v: f.v }); if (error) throw error;
   }
 }
+// WhatsApp do anúncio: não vem na lista; é pedido ao banco só na hora de usar (com limite por dia)
+async function zapDe(p) {
+  if (p.zap === undefined) {
+    await entrar();
+    const { data, error } = await sb.rpc('zap_do_pet', { p: p.id }); if (error) throw error;
+    p.zap = data || '';
+  }
+  return p.zap;
+}
 async function apagarPet(p) {
   const { data: fs } = await sb.from('fotos').select('foto, thumb').eq('pet', p.id);
   const { error } = await sb.from('pets').delete().eq('id', p.id); if (error) throw error;
@@ -429,6 +439,7 @@ function msgNuvem(e) {
   const m = String((e && e.message) || e);
   if (m.includes('limite_anuncios')) return 'Cada pessoa pode ter até 5 anúncios ativos. Arquive ou apague um que não precisa mais.';
   if (m.includes('limite_fotos')) return 'Cada anúncio pode ter até 6 fotos.';
+  if (m.includes('limite_zap')) return 'Você abriu o contato de muitos anúncios hoje. Tente de novo amanhã.';
   if (m.includes('limite_avistamentos')) return 'Você chegou ao limite de registros por hoje. Tente de novo amanhã.';
   return 'Não consegui salvar. Confira a internet e tente de novo.';
 }
@@ -607,7 +618,8 @@ function abrirCadastro(m, itens = [], pet = null) {
   $('lostErr').hidden = true; show('vLost');
 }
 $('goLost').onclick = () => abrirCadastro('perdido');
-function editar(pet) {
+async function editar(pet) {
+  try { await zapDe(pet); } catch (_) {}
   abrirCadastro(tipoDe(pet), pet.fotos.map(f => ({ id: f.id, url: blobUrl(f.thumb), thumb: f.thumb, foto: f.foto, emb: f.emb, v: f.v })), pet);
 }
 $('arqBtn').onclick = async () => {
@@ -760,13 +772,14 @@ function matchCard(r, { best, volta, local, de }) {
     const reg = el('button', 'btn small secondary', 'Registrar no anúncio'); reg.type = 'button';
     reg.onclick = () => openPoster(p, volta, true); acoes.append(reg);
   }
-  if (r.cos >= MATCH && p.zap) {
+  if (r.cos >= MATCH) {
     const a = el('a', 'btn small wa', p.contato ? `Falar com ${p.contato} no WhatsApp` : `Avisar ${tipoDe(p) === 'encontrado' ? 'quem encontrou' : 'o tutor'} no WhatsApp`);
-    a.target = '_blank'; a.rel = 'noopener'; a.href = waLink(p, null, de);
-    if (local) a.onclick = async ev => {
-      if (!$('withLoc').checked || !navigator.geolocation) return;
+    a.rel = 'noopener'; a.href = '#';
+    a.onclick = async ev => {
       ev.preventDefault();
-      location.href = waLink(p, (await pegarLocal()).pos, de); // sem localização, o aviso vai sem o link do mapa
+      try { if (!await zapDe(p)) return; } catch (e) { alert(msgNuvem(e)); return; }
+      const pos = local && $('withLoc').checked && navigator.geolocation ? (await pegarLocal()).pos : null;
+      location.href = waLink(p, pos, de); // sem localização, o aviso vai sem o link do mapa
     };
     acoes.append(a);
   }
@@ -805,7 +818,7 @@ function anuncioTexto(p) {
   if (p.recompensa) t.push(`RECOMPENSA: ${fmtReais(p.recompensa)}.`);
   const av = (p.avistamentos || [])[0];
   if (av) t.push(`Último avistamento (app Reencontro): ${fmtQuando(av.quando)}${av.texto ? ' — ' + av.texto.replace(/([^.!?])$/, '$1.') : '.'}`);
-  t.push(`${enc ? 'Conhece este animal?' : 'Se você viu,'} chame ${p.contato ? p.contato + ' ' : ''}no WhatsApp ${maskZap(p.zap)}.`);
+  t.push(`${enc ? 'Conhece este animal?' : 'Se você viu,'} chame ${p.contato ? p.contato + ' ' : ''}no WhatsApp${p.zap ? ' ' + maskZap(p.zap) : ''}.`);
   return t.join(' ');
 }
 async function drawPoster(p) {
@@ -849,7 +862,7 @@ async function drawPoster(p) {
   } else {
     const chamada = (enc ? 'Conhece este animal? ' : 'Viu este animal? ') + (p.contato ? `Fale com ${p.contato}` : 'Chame no WhatsApp');
     g.fillStyle = '#FFFFFF'; fit(chamada, 400, 40, 960); g.fillText(chamada, W / 2, 1232);
-    g.font = F(800, 76); g.fillText(maskZap(p.zap), W / 2, 1300);
+    g.font = F(800, 76); g.fillText(maskZap(p.zap || ''), W / 2, 1300);
   }
   let y = FOOT - 30;
   if (p.recompensa && !volta) {
@@ -900,6 +913,7 @@ async function openPoster(p, volta = 'vHome', registrar = false) {
   $('posterImg').hidden = true; $('posterProg').hidden = false;
   for (const id of ['posterShare', 'posterCopy']) $(id).disabled = true;
   $('posterDown').hidden = true;
+  if (!p.reencontrado) try { await zapDe(p); } catch (_) {}
   posterText = anuncioTexto(p);
   try {
     const blob = await drawPoster(p);

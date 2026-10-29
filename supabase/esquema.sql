@@ -153,3 +153,37 @@ create policy "ver a própria pasta" on storage.objects for select to authentica
   using (bucket_id = 'fotos' and (storage.foldername(name))[1] = (select auth.uid()::text));
 create policy "apagar da própria pasta" on storage.objects for delete to authenticated
   using (bucket_id = 'fotos' and (storage.foldername(name))[1] = (select auth.uid()::text));
+
+-- ============ WHATSAPP PROTEGIDO ============
+-- o número do anúncio não sai nas leituras normais (nem em "select *"); só pela função zap_do_pet,
+-- com login e no máximo 30 anúncios diferentes por pessoa por dia (o dono sempre vê o próprio)
+revoke select on public.pets from anon, authenticated;
+grant select (id, dono, tipo, nome, especie, bairro, data, descricao, contato, recompensa, reencontrado, arquivado, oculto, criado)
+  on public.pets to anon, authenticated;
+
+create table public.consultas_zap (
+  autor uuid not null default auth.uid() references auth.users on delete cascade,
+  pet uuid not null references public.pets on delete cascade,
+  quando timestamptz not null default now()
+);
+alter table public.consultas_zap enable row level security; -- sem políticas: só a função lê e grava
+create index on public.consultas_zap (autor, quando);
+
+create function public.zap_do_pet(p uuid) returns text language plpgsql security definer set search_path = '' as $$
+declare r record;
+begin
+  if auth.uid() is null then raise exception 'login'; end if;
+  select dono, zap, oculto, reencontrado into r from public.pets where id = p;
+  if not found then return null; end if;
+  if r.dono = auth.uid() then return r.zap; end if;
+  if r.oculto or r.reencontrado is not null then return null; end if;
+  if not exists (select 1 from public.consultas_zap where autor = auth.uid() and pet = p and quando > now() - interval '1 day') then
+    if (select count(*) from public.consultas_zap where autor = auth.uid() and quando > now() - interval '1 day') >= 30 then
+      raise exception 'limite_zap';
+    end if;
+    insert into public.consultas_zap (autor, pet) values (auth.uid(), p);
+  end if;
+  return r.zap;
+end $$;
+revoke execute on function public.zap_do_pet(uuid) from public, anon;
+grant execute on function public.zap_do_pet(uuid) to authenticated;
