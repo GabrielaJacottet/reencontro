@@ -187,3 +187,19 @@ begin
 end $$;
 revoke execute on function public.zap_do_pet(uuid) from public, anon;
 grant execute on function public.zap_do_pet(uuid) to authenticated;
+
+-- ============ SINAL DE VIDA ============
+-- o GitHub Actions (manter-ativo.yml) chama manter_ativo() todo dia: uma gravação de verdade,
+-- para o plano gratuito não pausar o projeto por falta de uso
+create table public.sinal (
+  id int primary key default 1 check (id = 1),
+  quando timestamptz not null default now()
+);
+insert into public.sinal default values;
+alter table public.sinal enable row level security; -- sem políticas: só a função grava
+
+create function public.manter_ativo() returns timestamptz language sql security definer set search_path = '' as $$
+  update public.sinal set quando = now() where id = 1 returning quando;
+$$;
+revoke execute on function public.manter_ativo() from public;
+grant execute on function public.manter_ativo() to anon;
