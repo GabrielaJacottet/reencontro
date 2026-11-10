@@ -11,6 +11,8 @@ create table public.pets (
   nome text check (char_length(nome) <= 40),
   especie text check (char_length(especie) <= 20),
   bairro text check (char_length(bairro) <= 60),
+  uf text check (uf ~ '^[A-Z]{2}$'),          -- estado e cidade: nomes da lista do IBGE
+  cidade text check (char_length(cidade) <= 60),
   data date,
   descricao text check (char_length(descricao) <= 500),
   contato text check (char_length(contato) <= 40),
@@ -60,6 +62,7 @@ create table public.denuncias (
 create index on public.fotos (pet);
 create index on public.avistamentos (pet);
 create index on public.pets (dono);
+create index on public.pets (uf, cidade);
 
 -- ============ REGRAS DE ACESSO (RLS) ============
 alter table public.pets enable row level security;
@@ -78,7 +81,7 @@ create policy "apagar o próprio anúncio" on public.pets for delete to authenti
   using (dono = (select auth.uid()));
 -- o dono não consegue mexer em "oculto" nem trocar o dono
 revoke update on public.pets from anon, authenticated;
-grant update (tipo, nome, especie, bairro, data, descricao, contato, zap, recompensa, reencontrado, arquivado)
+grant update (tipo, nome, especie, bairro, uf, cidade, data, descricao, contato, zap, recompensa, reencontrado, arquivado)
   on public.pets to authenticated;
 
 -- fotos: seguem a visibilidade do anúncio; só o dono do anúncio mexe
@@ -158,7 +161,7 @@ create policy "apagar da própria pasta" on storage.objects for delete to authen
 -- o número do anúncio não sai nas leituras normais (nem em "select *"); só pela função zap_do_pet,
 -- com login e no máximo 30 anúncios diferentes por pessoa por dia (o dono sempre vê o próprio)
 revoke select on public.pets from anon, authenticated;
-grant select (id, dono, tipo, nome, especie, bairro, data, descricao, contato, recompensa, reencontrado, arquivado, oculto, criado)
+grant select (id, dono, tipo, nome, especie, bairro, uf, cidade, data, descricao, contato, recompensa, reencontrado, arquivado, oculto, criado)
   on public.pets to anon, authenticated;
 
 create table public.consultas_zap (
@@ -203,3 +206,9 @@ create function public.manter_ativo() returns timestamptz language sql security 
 $$;
 revoke execute on function public.manter_ativo() from public;
 grant execute on function public.manter_ativo() to anon;
+
+-- ============ MIGRAÇÃO: banco criado antes de existir cidade (rode só este bloco, sem os "--") ============
+-- alter table public.pets add column uf text check (uf ~ '^[A-Z]{2}$'), add column cidade text check (char_length(cidade) <= 60);
+-- create index on public.pets (uf, cidade);
+-- grant update (uf, cidade) on public.pets to authenticated;
+-- grant select (uf, cidade) on public.pets to anon, authenticated;

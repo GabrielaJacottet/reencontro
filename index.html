@@ -71,7 +71,10 @@ p { margin: 0; }
 .note { font-size: .88em; color: var(--muted); display: flex; gap: 10px; align-items: flex-start; }
 .note svg { stroke: var(--accent); flex: none; margin-top: 2px; }
 
-label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 700; font-size: .95em; }
+.local { display: flex; gap: 8px; }
+.local select { min-height: 52px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bg); padding: 0 10px; font: inherit; font-weight: 400; font-size: 1.05em; color: inherit; min-width: 0; }
+.local select:first-child { flex: 0 0 5.2em; } .local select:last-child { flex: 1; }
+label.field, div.field { display: flex; flex-direction: column; gap: 6px; font-weight: 700; font-size: .95em; }
 label.field textarea { min-height: 96px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bg); padding: 12px 14px; font: inherit; font-weight: 400; font-size: 1.05em; width: 100%; resize: vertical; color: inherit; }
 .search { min-height: 52px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bg); padding: 0 14px; font-size: 1.05em; width: 100%; }
 label.field input { min-height: 52px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bg); padding: 0 14px; font-weight: 400; font-size: 1.05em; width: 100%; }
@@ -199,6 +202,9 @@ footer { font-size: .78em; color: var(--muted); }
         <button type="button" data-v="Gato" aria-pressed="false">Gatos</button>
         <button type="button" data-v="Outro" aria-pressed="false">Outros</button>
       </div>
+      <div class="local"><select id="filtroUf" aria-label="Estado"></select><select id="filtroCidade" aria-label="Cidade"></select></div>
+      <input class="search" id="filtroBairro" type="search" list="bairros" autocomplete="off" placeholder="Bairro (opcional)" aria-label="Filtrar por bairro"><datalist id="bairros"></datalist>
+      <p class="note" style="margin:0">A cidade escolhida aqui também vale para "Encontrei um animal".</p>
       <div class="pets" id="petList"></div>
     </div>
     <div class="panel" id="feedback">
@@ -245,6 +251,7 @@ footer { font-size: .78em; color: var(--muted); }
           <button type="button" data-v="Gato" aria-pressed="false">Gato</button>
           <button type="button" data-v="Outro" aria-pressed="false">Outro</button>
         </div>      </div>
+      <div class="field"><span>Estado e cidade</span><div class="local"><select id="fUf" aria-label="Estado"></select><select id="fCidade" aria-label="Cidade"></select></div></div>
       <label class="field"><span id="lBairro">Bairro onde foi visto por último(a)</span><input id="fBairro" type="text" autocomplete="off" placeholder="Ex.: Centro"></label>
       <label class="field"><span id="lData">Visto por último(a) no dia</span><input id="fData" type="date"></label>
       <label class="field"><span id="lDesc">Descrição</span><textarea id="fDesc" maxlength="300" rows="3"></textarea></label>
@@ -323,7 +330,7 @@ footer { font-size: .78em; color: var(--muted); }
     </div>
   </section>
 
-  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · <span id="versao">v17</span></footer>
+  <footer>Comparação de imagens com a rede DINOv2 (Meta, licença Apache 2.0) e o ONNX Runtime Web (licença MIT), rodando no aparelho. · <span id="versao">v19</span></footer>
 </div>
 
 <!-- ============ CÂMERA ============ -->
@@ -375,18 +382,33 @@ const meu = p => !!euId && p.dono === euId;
 const ms = t => t ? Date.parse(t) : 0, iso = n => n ? new Date(n).toISOString() : null;
 const urlFoto = c => sb.storage.from('fotos').getPublicUrl(c).data.publicUrl;
 const caminhoDe = url => decodeURIComponent(url.split('/object/public/fotos/')[1]);
-const CAMPOS = 'id, dono, tipo, nome, especie, bairro, data, descricao, contato, recompensa, reencontrado, arquivado, oculto, criado, fotos(id, ordem, foto, thumb, emb, v), avistamentos(*)';
+const CAMPOS = 'id, dono, tipo, nome, especie, bairro, uf, cidade, data, descricao, contato, recompensa, reencontrado, arquivado, oculto, criado, fotos(id, ordem, foto, thumb, emb, v), avistamentos(*)';
 const deAv = a => ({ id: a.id, autor: a.autor, quando: ms(a.quando), thumb: a.thumb ? urlFoto(a.thumb) : null, pct: a.pct, texto: a.texto || '', nome: a.nome || '', zap: a.zap || '',
   local: a.lat != null ? { lat: a.lat, lng: a.lng } : null });
 // linha do banco -> cadastro no formato do app (fotos viram links; vetores, listas de números)
-const dePet = r => ({ id: r.id, dono: r.dono, tipo: r.tipo, nome: r.nome || '', especie: r.especie, bairro: r.bairro || '', data: r.data || '', descricao: r.descricao || '',
+const dePet = r => ({ id: r.id, dono: r.dono, tipo: r.tipo, nome: r.nome || '', especie: r.especie, bairro: r.bairro || '', uf: r.uf || '', cidade: r.cidade || '', data: r.data || '', descricao: r.descricao || '',
   contato: r.contato || '', recompensa: r.recompensa || 0, reencontrado: ms(r.reencontrado), arquivado: ms(r.arquivado), criado: ms(r.criado),
   fotos: (r.fotos || []).sort((a, b) => a.ordem - b.ordem).map(f => ({ id: f.id, foto: urlFoto(f.foto), thumb: urlFoto(f.thumb), emb: f.emb ? JSON.parse(f.emb) : [], v: f.v })),
   avistamentos: (r.avistamentos || []).map(deAv).sort((a, b) => b.quando - a.quando) });
-async function allPets() {
+// f = { uf, cidade } (opcional): só anúncios desse estado / cidade
+async function allPets(f = {}) {
   await sessao;
-  const { data, error } = await sb.from('pets').select(CAMPOS); if (error) throw error;
+  let q = sb.from('pets').select(CAMPOS);
+  if (f.uf) q = q.eq('uf', f.uf); if (f.uf && f.cidade) q = q.eq('cidade', f.cidade);
+  const { data, error } = await q; if (error) throw error;
   return data.map(dePet).filter(p => p.fotos.length); // anúncio sem foto = gravação interrompida
+}
+// para comparar: só anúncios em aberto de um tipo (e espécie, se souber), os MAX_BUSCA mais recentes;
+// com f = { uf, cidade }, só desse lugar, mais os anúncios antigos sem cidade
+const MAX_BUSCA = 300;
+async function petsBusca(tipo, especie, f = {}) {
+  await sessao;
+  let q = sb.from('pets').select(CAMPOS).eq('tipo', tipo).is('reencontrado', null).is('arquivado', null);
+  if (especie) q = q.eq('especie', especie);
+  if (f.uf && f.cidade) q = q.or(`and(uf.eq.${f.uf},cidade.eq."${f.cidade.replace(/"/g, '')}"),uf.is.null`);
+  else if (f.uf) q = q.or(`uf.eq.${f.uf},uf.is.null`);
+  const { data, error } = await q.order('criado', { ascending: false }).limit(MAX_BUSCA); if (error) throw error;
+  return data.map(dePet).filter(p => p.fotos.length);
 }
 async function getPet(id) {
   await sessao;
@@ -402,7 +424,7 @@ async function subir(blob, nome) {
 // grava anúncio e fotos (só o dono): foto nova é Blob; a já enviada tem id e link
 async function putPet(p) {
   await entrar();
-  const campos = { tipo: tipoDe(p), nome: p.nome || null, especie: p.especie, bairro: p.bairro || null, data: p.data || null, descricao: p.descricao || null,
+  const campos = { tipo: tipoDe(p), nome: p.nome || null, especie: p.especie, bairro: p.bairro || null, uf: p.uf || null, cidade: p.cidade || null, data: p.data || null, descricao: p.descricao || null,
     contato: p.contato || null, recompensa: p.recompensa || 0, reencontrado: iso(p.reencontrado), arquivado: iso(p.arquivado) };
   if (p.zap !== undefined) campos.zap = p.zap || null; // não carregado = não mexe no número
   const up = await sb.from('pets').update(campos).eq('id', p.id).select('id'); if (up.error) throw up.error;
@@ -553,26 +575,61 @@ function chips(id, onchange) {
   bs.forEach(b => b.onclick = () => { bs.forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (onchange) onchange(); });
 }
 const chipVal = id => document.querySelector(`#${id} [aria-pressed="true"]`).dataset.v;
+const localDe = p => [p.bairro, p.cidade && `${p.cidade}/${p.uf}`].filter(Boolean).join(', ');
+
+/* ---------- Estados e cidades (lista do IBGE, guardada no aparelho depois da 1ª vez) ---------- */
+const lsGet = k => { try { return JSON.parse(localStorage.getItem(k)); } catch (_) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
+async function ibge(uf) {
+  const chave = 'ibge-' + (uf || 'uf'), salvo = lsGet(chave); if (salvo) return salvo;
+  const r = await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados' + (uf ? `/${uf}/municipios` : ''));
+  if (!r.ok) throw new Error('ibge');
+  const lista = (await r.json()).map(x => uf ? x.nome : x.sigla).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  lsSet(chave, lista); return lista;
+}
+function opcoes(sel, itens, vazio, valor) {
+  const o = el('option', '', vazio); o.value = '';
+  sel.replaceChildren(o, ...itens.map(i => { const x = el('option', '', i); x.value = i; return x; }));
+  sel.value = itens.includes(valor) ? valor : '';
+}
+// preenche o par de listas; sem internet, mantém só o valor atual
+async function preencherLocal(ufSel, cidSel, uf, cidade, vazioCid) {
+  const pedido = cidSel._p = (cidSel._p || 0) + 1;
+  try { opcoes(ufSel, await ibge(), 'UF', uf); } catch (_) { opcoes(ufSel, uf ? [uf] : [], 'UF', uf); }
+  cidSel.disabled = !uf;
+  if (!uf) return opcoes(cidSel, [], vazioCid, '');
+  let lista; try { lista = await ibge(uf); } catch (_) { lista = cidade ? [cidade] : []; vazioCid = 'Sem internet para listar cidades'; }
+  if (pedido === cidSel._p) opcoes(cidSel, lista, vazioCid, cidade);
+}
 
 /* ---------- Lista com filtro ---------- */
 chips('filtroTipo', renderPets); chips('filtroEspecie', renderPets);
-$('busca').addEventListener('input', () => renderPets());
+$('busca').addEventListener('input', () => renderPets()); $('filtroBairro').addEventListener('input', () => renderPets());
+// cidade da tela inicial: filtra a lista e a busca por foto; fica lembrada neste aparelho
+let local = lsGet('filtro-local') || { uf: '', cidade: '' };
+const lugarDe = f => f.cidade ? `${f.cidade}/${f.uf}` : f.uf;
+preencherLocal($('filtroUf'), $('filtroCidade'), local.uf, local.cidade, 'Todas as cidades');
+$('filtroUf').onchange = () => { local = { uf: $('filtroUf').value, cidade: '' }; lsSet('filtro-local', local); preencherLocal($('filtroUf'), $('filtroCidade'), local.uf, '', 'Todas as cidades'); renderPets(); };
+$('filtroCidade').onchange = () => { local.cidade = $('filtroCidade').value; lsSet('filtro-local', local); renderPets(); };
 async function renderPets() {
   while (urls.length) URL.revokeObjectURL(urls.pop());
   const list = $('petList'); list.textContent = '';
   let pets = [];
-  try { pets = await allPets(); } catch (_) { list.append(el('p', 'empty', 'Não consegui carregar os cadastros. Confira a internet.')); return; }
+  try { pets = await allPets(local); } catch (_) { list.append(el('p', 'empty', 'Não consegui carregar os cadastros. Confira a internet.')); return; }
   $('petsTitle').textContent = pets.length ? `Animais cadastrados (${pets.length})` : 'Animais cadastrados';
-  if (!pets.length) { list.append(el('p', 'empty', 'Nenhum animal cadastrado ainda. Para testar, cadastre um pet em "Perdi meu pet" e depois use "Encontrei um animal".')); return; }
-  const tipo = chipVal('filtroTipo'), esp = chipVal('filtroEspecie'), q = semAcento($('busca').value.trim());
+  const bairros = [...new Set(pets.map(p => p.bairro.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  $('bairros').replaceChildren(...bairros.map(b => { const o = el('option'); o.value = b; return o; }));
+  if (!pets.length) { list.append(el('p', 'empty', local.uf ? `Nenhum animal cadastrado em ${lugarDe(local)} ainda.` : 'Nenhum animal cadastrado ainda. Para testar, cadastre um pet em "Perdi meu pet" e depois use "Encontrei um animal".')); return; }
+  const tipo = chipVal('filtroTipo'), esp = chipVal('filtroEspecie'), q = semAcento($('busca').value.trim()), qb = semAcento($('filtroBairro').value.trim());
   const vis = pets.filter(p => (tipo === 'arquivado' ? p.arquivado : tipo === 'reencontrado' ? p.reencontrado && !p.arquivado : !p.arquivado && !p.reencontrado && (!tipo || tipoDe(p) === tipo)) && (!esp || p.especie === esp)
-    && (!q || semAcento([p.nome, p.bairro, p.descricao, p.especie, p.contato].join(' ')).includes(q)));
+    && (!qb || semAcento(p.bairro).includes(qb))
+    && (!q || semAcento([p.nome, p.bairro, p.cidade, p.descricao, p.especie, p.contato].join(' ')).includes(q)));
   if (!vis.length) { list.append(el('p', 'empty', 'Nenhum animal com esse filtro.')); return; }
   for (const pet of vis.sort((a, b) => b.criado - a.criado)) {
     const row = el('div', 'pet'), enc = tipoDe(pet) === 'encontrado', nav = (pet.avistamentos || []).length;
     const img = el('img'); img.alt = ''; img.src = blobUrl(pet.fotos[0].thumb);
     const info = el('div', 'info');
-    const meta = [pet.especie, since(pet.data, tipoDe(pet)), pet.bairro, nav && `${nav} avistamento${nav > 1 ? 's' : ''}`].filter(Boolean).join(' · ');
+    const meta = [pet.especie, since(pet.data, tipoDe(pet)), localDe(pet), nav && `${nav} avistamento${nav > 1 ? 's' : ''}`].filter(Boolean).join(' · ');
     const tags = el('div', 'tags');
     tags.append(el('span', 'level ' + (pet.arquivado ? 'lo' : enc || pet.reencontrado ? 'hi' : 'lost'), (pet.reencontrado ? 'De volta para casa' : enc ? 'Encontrado na rua' : 'Desaparecido') + (pet.arquivado ? ' · arquivado' : '')));
     if (pet.recompensa) tags.append(el('span', 'level rw', 'Recompensa ' + fmtReais(pet.recompensa)));
@@ -609,6 +666,8 @@ function abrirCadastro(m, itens = [], pet = null) {
   $('fZap').value = v.zap ? maskZap(v.zap) : ''; $('fRecompensa').value = v.recompensa ? fmtReais(v.recompensa) : '';
   $('fData').value = pet ? v.data || '' : hoje();
   setChip('fEspecie', v.especie || 'Cachorro');
+  // anúncio novo (ou antigo sem cidade) já vem com a cidade do filtro da tela inicial
+  preencherLocal($('fUf'), $('fCidade'), v.uf || local.uf, v.uf ? v.cidade : local.cidade, 'Escolha a cidade');
   $('saveLost').textContent = pet ? 'Salvar alterações' : 'Salvar cadastro';
   const arq = $('arqBtn'); arq.hidden = !pet; delete arq.dataset.armed;
   arq.textContent = pet && pet.arquivado ? 'Reativar cadastro' : m === 'perdido' ? 'Arquivar (parei de procurar)' : 'Arquivar (o animal não está mais comigo)';
@@ -683,6 +742,7 @@ function maskZap(v) {
 function zapValido(d) { return /^[1-9][1-9](9\d{8}|[2-9]\d{7})$/.test(d); }
 for (const ev of ['input', 'change', 'blur']) $('fZap').addEventListener(ev, e => { e.target.value = maskZap(e.target.value); }); // 'change' pega o preenchimento automático
 $('fRecompensa').addEventListener('input', e => { const d = e.target.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 6); e.target.value = d ? fmtReais(+d) : ''; });
+$('fUf').onchange = () => preencherLocal($('fUf'), $('fCidade'), $('fUf').value, '', 'Escolha a cidade');
 $('saveLost').onclick = async () => {
   const err = $('lostErr'); err.hidden = true;
   const falha = (msg, foco) => { err.hidden = false; err.textContent = msg; if (foco) $(foco).focus(); };
@@ -691,11 +751,13 @@ $('saveLost').onclick = async () => {
   if (draft.some(f => f.failed)) return falha('Remova as fotos marcadas com "não deu certo" ou "não é animal" (toque no ×).');
   if (draft.some(f => !f.emb)) return falha('Espere terminar de analisar as fotos.');
   if (!nome && modo === 'perdido') return falha('Escreva o nome do pet.', 'fNome');
+  const uf = $('fUf').value, cidade = $('fCidade').value;
+  if (!uf || !cidade) return falha('Escolha o estado e a cidade.', uf ? 'fCidade' : 'fUf');
   $('fZap').value = maskZap($('fZap').value);
   const zap = $('fZap').value.replace(/\D/g, '');
   if (!zapValido(zap)) return falha(zap ? `O WhatsApp ${$('fZap').value} parece incompleto. Use DDD + número, por exemplo (21) 99999-9999.` : 'Digite um WhatsApp com DDD para contato, por exemplo (21) 99999-9999.', 'fZap');
   const pet = { avistamentos: [], ...editando, id: editando ? editando.id : crypto.randomUUID(), criado: editando ? editando.criado : Date.now(),
-    tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), data: $('fData').value,
+    tipo: modo, nome, especie: chipVal('fEspecie'), bairro: $('fBairro').value.trim(), uf, cidade, data: $('fData').value,
     descricao: $('fDesc').value.trim(), contato: $('fContato').value.trim(), zap,
     recompensa: modo === 'perdido' ? +$('fRecompensa').value.replace(/\D/g, '') || 0 : 0,
     fotos: draft.map(f => ({ id: f.id, thumb: f.thumb, foto: f.foto, emb: Array.from(f.emb), v: f.v })) };
@@ -721,7 +783,8 @@ async function compare(blob) {
   $('foundProg').hidden = false; $('matches').textContent = ''; $('shareBox').hidden = true; $('regBox').hidden = true; achado = null;
   let pets = [];
   await atualizarCadastros();
-  try { pets = (await allPets()).filter(p => tipoDe(p) === 'perdido' && !p.arquivado && !p.reencontrado && comparavel(p)); } catch (_) {}
+  try { pets = (await petsBusca('perdido', null, local)).filter(comparavel); } catch (_) {}
+  const em = local.uf ? ` em ${lugarDe(local)}` : '';
   let prep, emb, r;
   try { prep = await prepare(blob); r = await embedPixels(prep.px); emb = r.emb; }
   catch (e) { $('foundProg').hidden = true; $('foundTitle').textContent = 'Não consegui analisar a foto'; $('foundSub').textContent = errMsg(e); return; }
@@ -733,9 +796,9 @@ async function compare(blob) {
   const achou = ranked.length > 0 && ranked[0].cos >= MATCH;
   $('regBox').hidden = false; $('regTitle').textContent = achou ? 'Não é nenhum desses?' : 'Cadastre este animal';
   $('regFound').className = 'btn' + (achou ? ' secondary' : '');
-  if (!pets.length) { $('foundTitle').textContent = 'Nenhum pet desaparecido cadastrado'; $('foundSub').textContent = 'Cadastre este animal como encontrado para o tutor achar.'; return; }
+  if (!pets.length) { $('foundTitle').textContent = 'Nenhum pet desaparecido cadastrado' + em; $('foundSub').textContent = 'Cadastre este animal como encontrado para o tutor achar.' + (em ? ' Para buscar em outra cidade, troque o filtro na tela inicial.' : ''); return; }
   $('foundTitle').textContent = achou ? `Pode ser ${nomeDe(ranked[0].p)}!` : 'Nenhum pet muito parecido';
-  $('foundSub').textContent = achou ? 'Confira o anúncio e as fotos antes de avisar o tutor.' : `Comparado com ${pets.length} pet${pets.length > 1 ? 's' : ''} desaparecido${pets.length > 1 ? 's' : ''}.`;
+  $('foundSub').textContent = achou ? 'Confira o anúncio e as fotos antes de avisar o tutor.' : `Comparado com ${pets.length} pet${pets.length > 1 ? 's' : ''} desaparecido${pets.length > 1 ? 's' : ''}${em || ' de todas as cidades'}.`;
   // guarda o reconhecimento no anúncio do pet (thread de avistamentos); quem encontrou pode completar depois
   avAtual.clear(); let thumbAv = null;
   for (const r of ranked) if (r.cos >= MATCH) {
@@ -812,8 +875,8 @@ $('posterBack').onclick = () => posterVolta === 'vHome' ? goHome() : show(poster
 function anuncioTexto(p) {
   const enc = tipoDe(p) === 'encontrado', t = [];
   if (p.reencontrado) return `${enc ? `O animal que encontrei${p.bairro ? ' no bairro ' + p.bairro : ''}` : `REENCONTRADO: ${p.nome}`} voltou para casa! Obrigado a todos que ajudaram e compartilharam.`;
-  if (enc) t.push(`ACHEI ESTE ANIMAL NA RUA e procuro o tutor: ${p.especie.toLowerCase()}${p.nome ? ' que parece se chamar ' + p.nome : ''}${p.bairro ? ', no bairro ' + p.bairro : ''}.${p.data ? ' Encontrado no dia: ' + fmtData(p.data) + '.' : ''}`);
-  else t.push(`PROCURA-SE: ${p.nome} (${p.especie.toLowerCase()})${p.bairro ? ', bairro ' + p.bairro : ''}.${p.data ? ' Visto por último(a) no dia: ' + fmtData(p.data) + '.' : ''}`);
+  if (enc) t.push(`ACHEI ESTE ANIMAL NA RUA e procuro o tutor: ${p.especie.toLowerCase()}${p.nome ? ' que parece se chamar ' + p.nome : ''}${p.bairro ? ', no bairro ' + p.bairro : ''}${p.cidade ? `, em ${p.cidade}/${p.uf}` : ''}.${p.data ? ' Encontrado no dia: ' + fmtData(p.data) + '.' : ''}`);
+  else t.push(`PROCURA-SE: ${p.nome} (${p.especie.toLowerCase()})${p.bairro ? ', bairro ' + p.bairro : ''}${p.cidade ? `, ${p.cidade}/${p.uf}` : ''}.${p.data ? ' Visto por último(a) no dia: ' + fmtData(p.data) + '.' : ''}`);
   if (p.descricao) t.push(p.descricao.replace(/([^.!?])$/, '$1.'));
   if (p.recompensa) t.push(`RECOMPENSA: ${fmtReais(p.recompensa)}.`);
   const av = (p.avistamentos || [])[0];
@@ -875,7 +938,7 @@ async function drawPoster(p) {
   const blocos = []; // [texto, peso, tamanho, cor, altura]
   const nomeTxt = p.nome || (enc && !volta ? 'Você conhece este animal?' : '');
   if (nomeTxt) blocos.push([nomeTxt, 800, 100, '#2A1E16', 112]);
-  blocos.push([[p.especie, p.bairro && (enc ? 'Encontrado no bairro ' : 'Bairro ') + p.bairro].filter(Boolean).join(' · '), 400, 42, '#6B5A4C', 56]);
+  blocos.push([[p.especie, p.bairro && (enc ? 'Encontrado no bairro ' : 'Bairro ') + p.bairro, p.cidade && `${p.cidade}/${p.uf}`].filter(Boolean).join(' · '), 400, 42, '#6B5A4C', 56]);
   if (p.data && !volta) blocos.push([(enc ? 'Encontrado no dia: ' : 'Visto por último(a) no dia: ') + fmtData(p.data), 800, 42, '#2A1E16', 56]);
   g.font = F(400, 38);
   if (p.descricao) linhas(p.descricao, 940, 3).forEach((l, i) => blocos.push([l, 400, 38, '#2A1E16', i ? 48 : 64]));
@@ -990,7 +1053,7 @@ $('avPost').onclick = async () => {
 async function mostrarParecidos(p) {
   let outros = [], eu = p;
   await atualizarCadastros();
-  try { eu = (await getPet(p.id)) || p; outros = (await allPets()).filter(o => tipoDe(o) !== tipoDe(p) && !o.arquivado && !o.reencontrado); } catch (_) {}
+  try { eu = (await getPet(p.id)) || p; outros = await petsBusca(tipoDe(p) === 'perdido' ? 'encontrado' : 'perdido', eu.especie, eu); } catch (_) {}
   const r = outros.map(o => eu.fotos.reduce((a, f) => { const m = f.v === VERSAO ? melhor(f.emb, o) : a; return m.cos > a.cos ? { p: o, ...m } : a; }, { p: o, cos: -1, foto: o.fotos[0] }))
     .filter(x => x.cos >= MATCH).sort((a, b) => b.cos - a.cos).slice(0, 3);
   if (!r.length) return;
