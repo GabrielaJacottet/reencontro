@@ -1,16 +1,21 @@
-# Grava um "sinal de vida" no Supabase todo dia para o plano gratuito não pausar o projeto (pausa após 7 dias sem uso).
-# Só ler a cada 3 dias não bastou: o aviso de pausa chegou mesmo assim (nov/2026).
+# Mantém o Supabase do plano gratuito ativo (pausa quando não vê "atividade suficiente" em 7 dias; o critério não é público).
+# Só ler a cada 3 dias não bastou, e 1 gravação por dia também não (aviso de pausa em nov/2026).
+# Agora, a cada 6 horas: gravação e leitura no banco, login (auth) e armazenamento de fotos (storage).
 name: Manter o Supabase ativo
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '17 */6 * * *'
   workflow_dispatch:
 jobs:
   sinal:
     runs-on: ubuntu-latest
+    env:
+      URL: https://fcxambvdgzteutokpgqs.supabase.co
+      KEY: sb_publishable_nxpqq2s8lBZ5rr3xAG-J-Q_7vxWeYuB
     steps:
-      - run: >
-          curl -fsS -X POST "https://fcxambvdgzteutokpgqs.supabase.co/rest/v1/rpc/manter_ativo"
-          -H "apikey: sb_publishable_nxpqq2s8lBZ5rr3xAG-J-Q_7vxWeYuB"
-          -H "Content-Type: application/json"
-          -d "{}"
+      - name: Banco, login e fotos
+        run: |
+          curl -fsS -X POST "$URL/rest/v1/rpc/manter_ativo" -H "apikey: $KEY" -H "Content-Type: application/json" -d '{}'
+          curl -fsS "$URL/rest/v1/pets?select=id&limit=1" -H "apikey: $KEY"
+          curl -fsS "$URL/auth/v1/settings" -H "apikey: $KEY" -o /dev/null
+          curl -fsS -X POST "$URL/storage/v1/object/list/fotos" -H "apikey: $KEY" -H "Content-Type: application/json" -d '{"prefix":"","limit":1}'
